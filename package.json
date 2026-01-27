@@ -1,0 +1,71 @@
+{
+  "name": "autozerts",
+  "title": "AutoZerts",
+  "description": "JIRA + Claude Code workflow automation — browse tasks, gather context, launch Claude to implement fixes in isolated git worktrees, and create PRs.",
+  "icon": "command-icon-2.png",
+  "author": "zerts",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "implement-task",
+      "title": "Implement Task",
+      "description": "Browse JIRA tasks, gather context, and launch Claude Code to implement fixes",
+      "mode": "view"
+    },
+    {
+      "name": "work-in-progress",
+      "title": "Work in Progress",
+      "description": "Track open PRs, review status, and provide feedback for Claude to implement",
+      "mode": "view"
+    },
+    {
+      "name": "run-orchestration",
+      "title": "Run Orchestration",
+      "description": "Background worker for Claude Code orchestration",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "claudeModel",
+      "type": "dropdown",
+      "required": false,
+      "title": "Claude Model",
+      "description": "Which Claude model to use for code generation",
+      "default": "claude-sonnet-4-5-20250929",
+      "data": [
+        {
+          "title": "Sonnet 4.5",
+          "value": "claude-sonnet-4-5-20250929"
+        },
+        {
+          "title": "Opus 4.5",
+          "value": "claude-opus-4-5-20251101"
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.19",
+    "@raycast/api": "^1.93.0",
+    "@raycast/utils": "^1.19.0",
+    "dotenv": "^16.4.7",
+    "fast-deep-equal": "^3.1.3",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "22.13.0",
+    "@types/react": "19.0.8",
+    "eslint": "^8.57.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}

@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment secrets
+.env
+.env.local
+
+# Raycast
+.raycast/
+
+# OS
+.DS_Store
