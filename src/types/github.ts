@@ -1,5 +1,10 @@
 /** GitHub REST API types */
 
+export interface GitHubLabel {
+  name: string;
+  color: string;
+}
+
 export interface GitHubPullRequest {
   id: number;
   number: number;
@@ -20,6 +25,7 @@ export interface GitHubPullRequest {
   changed_files: number;
   mergeable_state?: string;
   review_comments?: number;
+  labels?: GitHubLabel[];
 }
 
 export interface GitHubRef {
@@ -102,6 +108,16 @@ export interface GitHubSearchResponse {
   items: GitHubSearchItem[];
 }
 
+export interface GitHubCommit {
+  sha: string;
+  commit: {
+    message: string;
+    committer: {
+      date: string; // ISO 8601
+    };
+  };
+}
+
 export interface CreatePullRequestParams {
   owner: string;
   repo: string;
@@ -109,4 +125,5 @@ export interface CreatePullRequestParams {
   body: string;
   head: string;
   base: string;
+  labels?: string[];
 }

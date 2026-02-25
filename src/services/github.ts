@@ -6,10 +6,18 @@ import type {
   GitHubCheckSuiteResponse,
   GitHubSearchResponse,
   GitHubSearchItem,
+  GitHubCommit,
   CreatePullRequestParams,
 } from "../types/github";
 
 const API_BASE = "https://api.github.com";
+
+const BOT_LOGINS = new Set(["github-actions[bot]", "vercel[bot]", "linear[bot]"]);
+
+/** Returns true if the login belongs to a known bot account. */
+export function isBotUser(login: string): boolean {
+  return BOT_LOGINS.has(login);
+}
 
 async function ghFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { githubToken } = getConfig();
@@ -132,12 +140,33 @@ export async function fetchCheckRuns(
 }
 
 /**
+ * Fetch commits for a pull request.
+ */
+export async function fetchPRCommits(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<GitHubCommit[]> {
+  return ghFetch<GitHubCommit[]>(
+    `/repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=100`,
+  );
+}
+
+/**
+ * Returns the committer date of the last commit (array is chronological, oldest first).
+ */
+export function getLastCommitDate(commits: GitHubCommit[]): string | null {
+  if (commits.length === 0) return null;
+  return commits[commits.length - 1].commit.committer.date;
+}
+
+/**
  * Create a pull request.
  */
 export async function createPullRequest(
   params: CreatePullRequestParams,
 ): Promise<GitHubPullRequest> {
-  return ghFetch<GitHubPullRequest>(
+  const pr = await ghFetch<GitHubPullRequest>(
     `/repos/${params.owner}/${params.repo}/pulls`,
     {
       method: "POST",
@@ -149,6 +178,12 @@ export async function createPullRequest(
       }),
     },
   );
+
+  if (params.labels && params.labels.length > 0) {
+    await addLabels(params.owner, params.repo, pr.number, params.labels);
+  }
+
+  return pr;
 }
 
 /**
@@ -167,6 +202,21 @@ export async function addPRComment(
 }
 
 /**
+ * Add labels to an issue or pull request.
+ */
+export async function addLabels(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  labels: string[],
+): Promise<void> {
+  await ghFetch(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, {
+    method: "POST",
+    body: JSON.stringify({ labels }),
+  });
+}
+
+/**
  * Parse owner/repo from a GitHub URL or full_name.
  */
 export function parseRepoFullName(fullName: string): {
@@ -175,4 +225,89 @@ export function parseRepoFullName(fullName: string): {
 } {
   const parts = fullName.replace(/^https?:\/\/github\.com\//, "").split("/");
   return { owner: parts[0], repo: parts[1] };
+}
+
+/**
+ * Add a reaction to an issue comment (PR conversation comments).
+ */
+export async function addReactionToIssueComment(
+  owner: string,
+  repo: string,
+  commentId: number,
+  reaction: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes" = "+1",
+): Promise<void> {
+  const { githubToken } = getConfig();
+  await fetch(`${API_BASE}/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`, {
+    method: "POST",
+    headers: {
+      Authorization: `token ${githubToken}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ content: reaction }),
+  });
+}
+
+/**
+ * Add a reaction to a review comment (inline code comments).
+ */
+export async function addReactionToReviewComment(
+  owner: string,
+  repo: string,
+  commentId: number,
+  reaction: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes" = "+1",
+): Promise<void> {
+  const { githubToken } = getConfig();
+  await fetch(`${API_BASE}/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`, {
+    method: "POST",
+    headers: {
+      Authorization: `token ${githubToken}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ content: reaction }),
+  });
+}
+
+/**
+ * Mark all comments on a PR that were created after a cutoff date with a reaction.
+ * Excludes comments from the PR author.
+ */
+export async function markNewCommentsAsAddressed(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  prAuthor: string,
+  cutoffDate: string,
+): Promise<number> {
+  const cutoff = new Date(cutoffDate).getTime();
+  let markedCount = 0;
+
+  // Fetch and react to issue comments
+  const issueComments = await fetchPRComments(owner, repo, prNumber);
+  for (const comment of issueComments) {
+    if (comment.user.login !== prAuthor && !isBotUser(comment.user.login) && new Date(comment.created_at).getTime() > cutoff) {
+      try {
+        await addReactionToIssueComment(owner, repo, comment.id);
+        markedCount++;
+      } catch {
+        // Ignore reaction failures (might already exist)
+      }
+    }
+  }
+
+  // Fetch and react to review comments (inline)
+  const reviewComments = await fetchReviewComments(owner, repo, prNumber);
+  for (const comment of reviewComments) {
+    if (comment.user.login !== prAuthor && !isBotUser(comment.user.login) && new Date(comment.created_at).getTime() > cutoff) {
+      try {
+        await addReactionToReviewComment(owner, repo, comment.id);
+        markedCount++;
+      } catch {
+        // Ignore reaction failures
+      }
+    }
+  }
+
+  return markedCount;
 }

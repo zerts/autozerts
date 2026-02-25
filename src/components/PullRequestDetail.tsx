@@ -10,32 +10,65 @@ import {
   fetchReviews,
   fetchPRComments,
   fetchReviewComments,
+  fetchPRCommits,
+  getLastCommitDate,
   parseRepoFullName,
+  isBotUser,
 } from "../services/github";
+import { getPlanFilePath } from "../services/worktree";
 import { FeedbackForm } from "./FeedbackForm";
 
 interface PullRequestDetailProps {
   pr: GitHubPullRequest;
   taskState?: TaskState;
+  lastCommitDate?: string | null;
 }
 
-export function PullRequestDetail({ pr, taskState }: PullRequestDetailProps) {
+export function PullRequestDetail({
+  pr,
+  taskState,
+  lastCommitDate: passedLastCommitDate,
+}: PullRequestDetailProps) {
   const { owner, repo } = parseRepoFullName(pr.base.repo.full_name);
 
+  const planFilePath = getPlanFilePath(pr.head.ref);
+
   const { data, isLoading } = usePromise(async () => {
-    const [reviews, comments, reviewComments] = await Promise.all([
+    const fs = await import("fs/promises");
+    const [reviews, comments, reviewComments, commits] = await Promise.all([
       fetchReviews(owner, repo, pr.number),
       fetchPRComments(owner, repo, pr.number),
       fetchReviewComments(owner, repo, pr.number),
+      fetchPRCommits(owner, repo, pr.number),
     ]);
-    return { reviews, comments, reviewComments };
+    const fetchedLastCommitDate = getLastCommitDate(commits);
+
+    let planExists = false;
+    try {
+      await fs.access(planFilePath);
+      planExists = true;
+    } catch {
+      // Plan file doesn't exist
+    }
+
+    return {
+      reviews,
+      comments,
+      reviewComments,
+      lastCommitDate: fetchedLastCommitDate,
+      planExists,
+    };
   });
+
+  const resolvedLastCommitDate =
+    data?.lastCommitDate ?? passedLastCommitDate ?? null;
 
   const markdown = buildPRDetailMarkdown(
     pr,
     data?.reviews,
     data?.comments,
     data?.reviewComments,
+    resolvedLastCommitDate,
   );
 
   return (
@@ -68,11 +101,11 @@ export function PullRequestDetail({ pr, taskState }: PullRequestDetailProps) {
               }
             />
           </Detail.Metadata.TagList>
-          {taskState?.jiraUrl && (
+          {taskState?.issueUrl && (
             <Detail.Metadata.Link
-              title="JIRA"
-              target={taskState.jiraUrl}
-              text={taskState.jiraKey}
+              title="Linear"
+              target={taskState.issueUrl}
+              text={taskState.issueKey}
             />
           )}
           {taskState?.costUsd !== undefined && (
@@ -91,6 +124,12 @@ export function PullRequestDetail({ pr, taskState }: PullRequestDetailProps) {
             title="Updated"
             text={new Date(pr.updated_at).toLocaleDateString()}
           />
+          {resolvedLastCommitDate && (
+            <Detail.Metadata.Label
+              title="Last Commit"
+              text={new Date(resolvedLastCommitDate).toLocaleDateString()}
+            />
+          )}
         </Detail.Metadata>
       }
       actions={
@@ -98,13 +137,33 @@ export function PullRequestDetail({ pr, taskState }: PullRequestDetailProps) {
           <Action.Push
             title="Add Feedback"
             icon={Icon.Message}
-            target={<FeedbackForm pr={pr} taskState={taskState} />}
+            target={
+              <FeedbackForm
+                pr={pr}
+                taskState={taskState}
+                lastCommitDate={resolvedLastCommitDate}
+              />
+            }
           />
-          <Action.OpenInBrowser title="Open on GitHub" url={pr.html_url} />
-          {taskState?.jiraUrl && (
-            <Action.OpenInBrowser
-              title="Open in Jira"
-              url={taskState.jiraUrl}
+          {data?.planExists && (
+            <Action.Open
+              title="Open Plan in VS Code"
+              icon={Icon.Code}
+              target={planFilePath}
+              application="Code"
+            />
+          )}
+          <Action.OpenInBrowser
+            title="Open on GitHub"
+            url={pr.html_url}
+            icon={{ source: "github.svg" }}
+          />
+          {taskState?.issueUrl && (
+            <Action.Open
+              title="Open in Linear"
+              icon={{ source: "linear.svg" }}
+              target={taskState.issueUrl}
+              application="Linear"
               shortcut={{ modifiers: ["cmd"], key: "j" }}
             />
           )}
@@ -119,16 +178,55 @@ export function PullRequestDetail({ pr, taskState }: PullRequestDetailProps) {
   );
 }
 
+function isNewComment(lastCommitDate: string | null, dateStr: string): boolean {
+  if (!lastCommitDate) return false;
+  return new Date(dateStr).getTime() > new Date(lastCommitDate).getTime();
+}
+
 function buildPRDetailMarkdown(
   pr: GitHubPullRequest,
   reviews?: GitHubReview[],
   comments?: GitHubComment[],
   reviewComments?: GitHubComment[],
+  lastCommitDate?: string | null,
 ): string {
   const sections: string[] = [];
 
   sections.push(`# ${pr.title}`);
   sections.push("");
+
+  // Count new comments for summary
+  if (lastCommitDate) {
+    let newCount = 0;
+    if (reviews) {
+      for (const r of reviews) {
+        if (!isBotUser(r.user.login) && r.body && isNewComment(lastCommitDate, r.submitted_at)) {
+          newCount++;
+        }
+      }
+    }
+    if (reviewComments) {
+      for (const c of reviewComments) {
+        if (!isBotUser(c.user.login) && isNewComment(lastCommitDate, c.created_at)) {
+          newCount++;
+        }
+      }
+    }
+    if (comments) {
+      for (const c of comments) {
+        if (!isBotUser(c.user.login) && isNewComment(lastCommitDate, c.created_at)) {
+          newCount++;
+        }
+      }
+    }
+    if (newCount > 0) {
+      const dateStr = new Date(lastCommitDate).toLocaleDateString();
+      sections.push(
+        `> **${newCount} new comment${newCount === 1 ? "" : "s"} since last commit** (${dateStr})`,
+      );
+      sections.push("");
+    }
+  }
 
   if (pr.body) {
     sections.push(pr.body);
@@ -146,7 +244,13 @@ function buildPRDetailMarkdown(
           : review.state === "CHANGES_REQUESTED"
             ? "❌"
             : "💬";
-      sections.push(`${stateEmoji} **${review.user.login}** — ${review.state}`);
+      const newBadge =
+        !isBotUser(review.user.login) && review.body && isNewComment(lastCommitDate ?? null, review.submitted_at)
+          ? " `NEW`"
+          : "";
+      sections.push(
+        `${stateEmoji} **${review.user.login}** — ${review.state}${newBadge}`,
+      );
       if (review.body) {
         sections.push(`> ${review.body}`);
       }
@@ -162,7 +266,10 @@ function buildPRDetailMarkdown(
       const location = comment.path
         ? `\`${comment.path}${comment.line ? `:${comment.line}` : ""}\``
         : "";
-      sections.push(`**${comment.user.login}** ${location}`);
+      const newBadge = !isBotUser(comment.user.login) && isNewComment(lastCommitDate ?? null, comment.created_at)
+        ? " `NEW`"
+        : "";
+      sections.push(`**${comment.user.login}** ${location}${newBadge}`);
       sections.push(comment.body);
       sections.push("");
     }
@@ -173,8 +280,11 @@ function buildPRDetailMarkdown(
     sections.push("## Comments");
     sections.push("");
     for (const comment of comments) {
+      const newBadge = !isBotUser(comment.user.login) && isNewComment(lastCommitDate ?? null, comment.created_at)
+        ? " `NEW`"
+        : "";
       sections.push(
-        `**${comment.user.login}** (${new Date(comment.created_at).toLocaleDateString()}):`,
+        `**${comment.user.login}** (${new Date(comment.created_at).toLocaleDateString()}):${newBadge}`,
       );
       sections.push(comment.body);
       sections.push("");

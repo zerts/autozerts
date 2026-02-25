@@ -1,15 +1,30 @@
-import { Detail, ActionPanel, Action, Icon, Color, showToast, Toast, launchCommand, LaunchType } from "@raycast/api";
+import {
+  Detail,
+  ActionPanel,
+  Action,
+  Icon,
+  Color,
+  showToast,
+  Toast,
+  launchCommand,
+  LaunchType,
+} from "@raycast/api";
 import { useState, useEffect, useRef, useMemo } from "react";
 import equal from "fast-deep-equal";
-import { getTask, requestCancellation, sanitizeUnicode } from "../utils/storage";
+import {
+  getTask,
+  requestCancellation,
+  sanitizeUnicode,
+} from "../utils/storage";
 import {
   TASK_STATUS_LABELS,
   type TaskState,
   type TaskStatus,
 } from "../types/storage";
+import { PlanFeedbackForm } from "./PlanFeedbackForm";
 
 interface ExecutionProgressProps {
-  jiraKey: string;
+  issueKey: string;
 }
 
 const PLAN_STATUS_ORDER: TaskStatus[] = [
@@ -45,29 +60,106 @@ const PLAN_THEN_IMPL_STATUS_ORDER: TaskStatus[] = [
 ];
 
 function getStatusOrder(task: TaskState): TaskStatus[] {
-  const isPlanPhase = task.status === "planning" || task.status === "plan_complete";
-  const hasPassedPlan = task.progressLog.some((l) => l.includes("Plan complete"));
+  const isPlanPhase =
+    task.status === "planning" || task.status === "plan_complete";
+  const hasPassedPlan = task.progressLog.some((l) =>
+    l.includes("Plan complete"),
+  );
 
   if (isPlanPhase) return PLAN_STATUS_ORDER;
   if (hasPassedPlan) return PLAN_THEN_IMPL_STATUS_ORDER;
   return IMPL_STATUS_ORDER;
 }
 
-export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
+interface StepInfo {
+  label: string;
+  icon: Icon;
+  color: Color;
+}
+
+function getProgressSteps(task: TaskState): StepInfo[] {
+  const isFeedback = task.status === "feedback_implementing";
+  if (isFeedback) {
+    return [
+      {
+        label: "Implementing Feedback",
+        icon: Icon.CircleProgress,
+        color: Color.Orange,
+      },
+    ];
+  }
+
+  const statusOrder = getStatusOrder(task);
+  const currentIndex = statusOrder.indexOf(task.status);
+  const isError = task.status === "error";
+  const isCancelled = task.status === "cancelled";
+
+  const steps: StepInfo[] = [];
+
+  for (const step of statusOrder) {
+    const label = TASK_STATUS_LABELS[step];
+    const stepIndex = statusOrder.indexOf(step);
+
+    let icon: Icon;
+    let color: Color;
+
+    if (isError || isCancelled) {
+      const lastGoodIndex = isError ? currentIndex : -1;
+      if (lastGoodIndex < 0) {
+        icon = isError ? Icon.XMarkCircle : Icon.Circle;
+        color = isError ? Color.Red : Color.SecondaryText;
+      } else if (stepIndex <= lastGoodIndex) {
+        icon = Icon.Checkmark;
+        color = Color.Green;
+      } else if (stepIndex === lastGoodIndex + 1) {
+        icon = isError ? Icon.XMarkCircle : Icon.Circle;
+        color = isError ? Color.Red : Color.SecondaryText;
+      } else {
+        icon = Icon.Circle;
+        color = Color.SecondaryText;
+      }
+    } else if (stepIndex < currentIndex) {
+      icon = Icon.Checkmark;
+      color = Color.Green;
+    } else if (stepIndex === currentIndex) {
+      icon = Icon.CircleProgress;
+      color = Color.Orange;
+    } else {
+      icon = Icon.Circle;
+      color = Color.SecondaryText;
+    }
+
+    steps.push({ label, icon, color });
+  }
+
+  if (isError) {
+    steps.push({ label: "Error", icon: Icon.XMarkCircle, color: Color.Red });
+  } else if (isCancelled) {
+    steps.push({
+      label: "Cancelled",
+      icon: Icon.MinusCircle,
+      color: Color.SecondaryText,
+    });
+  }
+
+  return steps;
+}
+
+export function ExecutionProgress({ issueKey }: ExecutionProgressProps) {
   const [task, setTask] = useState<TaskState | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const taskRef = useRef<TaskState | null>(null);
 
   useEffect(() => {
     // Initial fetch
-    getTask(jiraKey).then((t) => {
+    getTask(issueKey).then((t) => {
       taskRef.current = t;
       setTask(t);
     });
 
     // Poll every 1s for responsive updates during Claude execution
     intervalRef.current = setInterval(async () => {
-      const updated = await getTask(jiraKey);
+      const updated = await getTask(issueKey);
       if (updated && !equal(updated, taskRef.current)) {
         taskRef.current = updated;
         setTask(updated);
@@ -77,10 +169,15 @@ export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [jiraKey]);
-  
-    const isTerminal = task ? ["complete", "error", "cancelled", "plan_complete"].includes(task.status) : false;
-    const markdown = useMemo(() => task ? buildProgressMarkdown(task) : null, [task]);
+  }, [issueKey]);
+
+  const isTerminal = task
+    ? ["complete", "error", "cancelled", "plan_complete"].includes(task.status)
+    : false;
+  const markdown = useMemo(
+    () => (task ? buildProgressMarkdown(task) : null),
+    [task],
+  );
 
   if (!task) {
     return <Detail isLoading markdown="Loading task state..." />;
@@ -94,7 +191,7 @@ export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
         <Detail.Metadata>
           <Detail.Metadata.Label
             title="Task"
-            text={`${task.jiraKey}: ${task.jiraSummary}`}
+            text={`${task.issueKey}: ${task.issueSummary}`}
           />
           <Detail.Metadata.Label title="Repository" text={task.repoName} />
           <Detail.Metadata.Label title="Branch" text={task.branchName} />
@@ -133,28 +230,47 @@ export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
             />
           )}
           <Detail.Metadata.Link
-            title="JIRA"
-            target={task.jiraUrl}
+            title="Linear"
+            target={task.issueUrl}
             text="Open in browser"
           />
+          <Detail.Metadata.Separator />
+          {getProgressSteps(task).map((step, index) => (
+            <Detail.Metadata.Label
+              key={index}
+              title=""
+              text={step.label}
+              icon={{ source: step.icon, tintColor: step.color }}
+            />
+          ))}
         </Detail.Metadata>
       }
       actions={
         <ActionPanel>
           {task.status === "plan_complete" && (
-            <Action
-              title="Implement Plan"
-              icon={Icon.Hammer}
-              shortcut={{ modifiers: ["cmd"], key: "return" }}
-              onAction={async () => {
-                await launchCommand({
-                  name: "run-orchestration",
-                  type: LaunchType.UserInitiated,
-                  context: { jiraKey },
-                });
-                await showToast({ style: Toast.Style.Animated, title: "Implementation started..." });
-              }}
-            />
+            <>
+              <Action
+                title="Implement Plan"
+                icon={Icon.Hammer}
+                shortcut={{ modifiers: ["cmd"], key: "return" }}
+                onAction={async () => {
+                  await launchCommand({
+                    name: "run-orchestration",
+                    type: LaunchType.UserInitiated,
+                    context: { issueKey },
+                  });
+                  await showToast({
+                    style: Toast.Style.Animated,
+                    title: "Implementation started...",
+                  });
+                }}
+              />
+              <Action.Push
+                title="Update Plan"
+                icon={Icon.Pencil}
+                target={<PlanFeedbackForm task={task} />}
+              />
+            </>
           )}
           {!isTerminal && (
             <Action
@@ -163,8 +279,11 @@ export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
               style={Action.Style.Destructive}
               shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
               onAction={async () => {
-                await requestCancellation(jiraKey);
-                await showToast({ style: Toast.Style.Animated, title: "Cancellation requested..." });
+                await requestCancellation(issueKey);
+                await showToast({
+                  style: Toast.Style.Animated,
+                  title: "Cancellation requested...",
+                });
               }}
             />
           )}
@@ -179,10 +298,15 @@ export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
             <Action.OpenInBrowser
               title="Open Pull Request"
               url={task.prUrl}
-              icon={Icon.Globe}
+              icon={{ source: "github.svg" }}
             />
           )}
-          <Action.OpenInBrowser title="Open in Jira" url={task.jiraUrl} />
+          <Action.Open
+            title="Open in Linear"
+            icon={{ source: "linear.svg" }}
+            target={task.issueUrl}
+            application="Linear"
+          />
           {task.worktreePath && (
             <Action.Open
               title="Open Worktree in Editor"
@@ -219,57 +343,8 @@ export function ExecutionProgress({ jiraKey }: ExecutionProgressProps) {
 function buildProgressMarkdown(task: TaskState): string {
   const sections: string[] = [];
 
-  sections.push(`# ${task.jiraKey}: ${task.jiraSummary}`);
+  sections.push(`# ${task.issueKey}: ${task.issueSummary}`);
   sections.push("");
-
-  // Checklist with emoji — skip for feedback tasks (status not in any order)
-  const isFeedback = task.status === "feedback_implementing";
-  if (!isFeedback) {
-    sections.push("## Progress");
-    sections.push("");
-    const statusOrder = getStatusOrder(task);
-    const currentIndex = statusOrder.indexOf(task.status);
-    const isError = task.status === "error";
-    const isCancelled = task.status === "cancelled";
-
-    for (const step of statusOrder) {
-      const label = TASK_STATUS_LABELS[step];
-      const stepIndex = statusOrder.indexOf(step);
-
-      let emoji: string;
-      if (isError || isCancelled) {
-        // Find how far we got before the error/cancel
-        const lastGoodIndex = isError
-          ? currentIndex // error isn't in STATUS_ORDER, so currentIndex is -1
-          : -1;
-        if (lastGoodIndex < 0) {
-          // Could not determine progress; mark all as unknown
-          emoji = isError ? "🔴" : "⚪";
-        } else if (stepIndex <= lastGoodIndex) {
-          emoji = "✅";
-        } else if (stepIndex === lastGoodIndex + 1) {
-          emoji = isError ? "❌" : "⚪";
-        } else {
-          emoji = "⬜";
-        }
-      } else if (stepIndex < currentIndex) {
-        emoji = "✅";
-      } else if (stepIndex === currentIndex) {
-        emoji = "🔄";
-      } else {
-        emoji = "⬜";
-      }
-
-      sections.push(`${emoji}  ${label}\n`);
-    }
-
-    // Show error/cancelled status at the end of the checklist
-    if (isError) {
-      sections.push(`❌  Error\n`);
-    } else if (isCancelled) {
-      sections.push(`⚪  Cancelled\n`);
-    }
-  }
 
   // Error message
   if (task.status === "error" && task.error) {

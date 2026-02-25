@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "WebFetch(domain:linear.app)",
+      "WebSearch",
+      "WebFetch(domain:dashboardicons.com)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx ray build:*)",
+      "Bash(git checkout:*)",
+      "Bash(npx prettier:*)",
+      "Bash(node -e:*)",
+      "Bash(npm run build:worker:*)",
+      "Bash(node scripts/check-config.js && echo \"✓ passes\")",
+      "Bash(node scripts/check-config.js && echo \"✓ passes \\(no warnings\\)\")"
+    ]
+  }
+}

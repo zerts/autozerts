@@ -4,18 +4,18 @@ export interface RepoConfig {
   name: string;
   localPath: string;
   defaultBranch: string;
+  issuePrefixes: string[];
 }
 
 export interface EnvConfig {
-  jiraBaseUrl: string;
-  jiraEmail: string;
-  jiraApiToken: string;
-  jiraProjectKeys: string[];
+  linearApiKey: string;
   githubToken: string;
   githubOwner: string;
   repos: RepoConfig[];
+  extensionQaRepoPath: string;
   worktreeBasePath: string;
   planFilesPath: string;
+  logFilesPath: string;
   claudeMaxTurns: number;
   claudeMaxBudgetUsd: number;
   claudeModel: string;

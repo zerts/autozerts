@@ -1,60 +1,78 @@
 import { Detail, ActionPanel, Action, Icon, Color } from "@raycast/api";
-import type { JiraIssue } from "../types/jira";
-import { adfToMarkdown } from "../utils/adf-to-markdown";
-import { issueUrl } from "../services/jira";
+import { usePromise } from "@raycast/utils";
+import type { LinearIssue } from "../types/linear";
+import { getPlanFilePath } from "../services/worktree";
+import { generateBranchName } from "../utils/branch-naming";
+import { getTask } from "../utils/storage";
 import { ContextForm } from "./ContextForm";
+import { PlanFeedbackForm } from "./PlanFeedbackForm";
 
 interface TaskDetailProps {
-  issue: JiraIssue;
+  issue: LinearIssue;
 }
 
 export function TaskDetail({ issue }: TaskDetailProps) {
-  const descriptionMd = adfToMarkdown(issue.fields.description);
+  const descriptionMd = issue.description ?? "";
   const commentsMd = buildCommentsMd(issue);
   const markdown = buildMarkdown(issue, descriptionMd, commentsMd);
+
+  const branchName = generateBranchName(issue.title, issue.identifier);
+  const planFilePath = getPlanFilePath(branchName);
+
+  const { data: planData } = usePromise(async () => {
+    const fs = await import("fs/promises");
+    let planExists = false;
+    try {
+      await fs.access(planFilePath);
+      planExists = true;
+    } catch {
+      // Plan doesn't exist
+    }
+    const task = await getTask(issue.identifier);
+    return { planExists, task };
+  });
+
+  const planExists = planData?.planExists ?? false;
+  const task = planData?.task;
 
   return (
     <Detail
       markdown={markdown}
       metadata={
         <Detail.Metadata>
-          <Detail.Metadata.Label title="Key" text={issue.key} />
-          <Detail.Metadata.Label
-            title="Type"
-            text={issue.fields.issuetype.name}
-          />
+          <Detail.Metadata.Label title="Key" text={issue.identifier} />
           <Detail.Metadata.Label
             title="Priority"
-            text={issue.fields.priority.name}
+            text={issue.priorityLabel}
           />
           <Detail.Metadata.TagList title="Status">
             <Detail.Metadata.TagList.Item
-              text={issue.fields.status.name}
+              text={issue.state.name}
               color={
-                issue.fields.status.statusCategory.key === "done"
+                issue.state.type === "completed"
                   ? Color.Green
-                  : issue.fields.status.statusCategory.key === "indeterminate"
+                  : issue.state.type === "started"
                     ? Color.Yellow
                     : Color.Blue
               }
             />
           </Detail.Metadata.TagList>
-          {issue.fields.sprint && (
+          {issue.cycle && (
             <Detail.Metadata.Label
-              title="Sprint"
-              text={issue.fields.sprint.name}
+              title="Cycle"
+              text={issue.cycle.name ?? `Cycle ${issue.cycle.number}`}
             />
           )}
           <Detail.Metadata.Separator />
-          {issue.fields.comment?.total !== undefined && (
+          {issue.comments?.nodes?.length !== undefined && (
             <Detail.Metadata.Label
               title="Comments"
-              text={`${issue.fields.comment.total}`}
+              text={`${issue.comments.nodes.length}`}
             />
           )}
           <Detail.Metadata.Link
-            title="JIRA"
-            target={issueUrl(issue.key)}
+            title="Linear"
+            target={issue.url}
             text="Open in browser"
           />
         </Detail.Metadata>
@@ -68,9 +86,26 @@ export function TaskDetail({ issue }: TaskDetailProps) {
               <ContextForm issue={issue} descriptionMarkdown={descriptionMd} />
             }
           />
-          <Action.OpenInBrowser
-            title="Open in Jira"
-            url={issueUrl(issue.key)}
+          {planExists && task && (
+            <Action.Push
+              title="Update Plan"
+              icon={Icon.Pencil}
+              target={<PlanFeedbackForm task={task} />}
+            />
+          )}
+          {planExists && (
+            <Action.Open
+              title="Open Plan in VS Code"
+              icon={Icon.Code}
+              target={planFilePath}
+              application="Code"
+            />
+          )}
+          <Action.Open
+            title="Open in Linear"
+            icon={{ source: "linear.svg" }}
+            target={issue.url}
+            application="Linear"
             shortcut={{ modifiers: ["cmd"], key: "o" }}
           />
           <Action.CopyToClipboard
@@ -84,32 +119,31 @@ export function TaskDetail({ issue }: TaskDetailProps) {
   );
 }
 
-function buildCommentsMd(issue: JiraIssue): string {
-  const comments = issue.fields.comment?.comments;
+function buildCommentsMd(issue: LinearIssue): string {
+  const comments = issue.comments?.nodes;
   if (!comments || comments.length === 0) return "";
 
   const sections: string[] = [];
   sections.push("## Comments");
   sections.push("");
   for (const comment of comments) {
-    const author = comment.author.displayName;
-    const date = new Date(comment.created).toLocaleDateString();
-    const body = adfToMarkdown(comment.body);
+    const author = comment.user?.name ?? "Unknown";
+    const date = new Date(comment.createdAt).toLocaleDateString();
     sections.push(`**${author}** (${date}):`);
-    sections.push(body);
+    sections.push(comment.body);
     sections.push("");
   }
   return sections.join("\n");
 }
 
 function buildMarkdown(
-  issue: JiraIssue,
+  issue: LinearIssue,
   descriptionMd: string,
   commentsMd: string,
 ): string {
   const sections: string[] = [];
 
-  sections.push(`# ${issue.key}: ${issue.fields.summary}`);
+  sections.push(`# ${issue.identifier}: ${issue.title}`);
   sections.push("");
 
   if (descriptionMd) {

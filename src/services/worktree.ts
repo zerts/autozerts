@@ -233,6 +233,27 @@ export async function installDependencies(worktreePath: string): Promise<void> {
  * Returns true if a commit was created, false if the tree was clean.
  */
 export async function commitAllChanges(worktreePath: string): Promise<boolean> {
+  // Run prettier on changed files before committing
+  try {
+    const { stdout: diffOutput } = await execFileAsync(
+      "git",
+      ["diff", "--name-only", "--diff-filter=ACMR", "HEAD"],
+      { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
+    );
+    const changedFiles = diffOutput
+      .trim()
+      .split("\n")
+      .filter(f => f.length > 0);
+    if (changedFiles.length > 0) {
+      await execFileAsync("npx", ["prettier", "--write", ...changedFiles], {
+        cwd: worktreePath,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    }
+  } catch {
+    // prettier not available or failed — continue without formatting
+  }
+
   await git(["add", "-A"], worktreePath);
 
   // git diff --cached --quiet exits with 1 when there are staged changes
@@ -268,4 +289,17 @@ export async function pushBranch(
 ): Promise<void> {
   const url = getRepoUrl(repoName);
   await gitAuth(["push", url, `HEAD:refs/heads/${branchName}`], worktreePath);
+}
+
+/**
+ * Pull latest changes from origin for the current branch with rebase.
+ * Rebases local commits on top of remote changes.
+ */
+export async function pullBranch(
+  worktreePath: string,
+  branchName: string,
+  repoName: string,
+): Promise<void> {
+  const url = getRepoUrl(repoName);
+  await gitAuth(["pull", "--rebase", url, branchName], worktreePath);
 }

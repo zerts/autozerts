@@ -1,15 +1,15 @@
 {
   "name": "autozerts",
   "title": "AutoZerts",
-  "description": "JIRA + Claude Code workflow automation — browse tasks, gather context, launch Claude to implement fixes in isolated git worktrees, and create PRs.",
-  "icon": "command-icon-2.png",
+  "description": "Linear + Claude Code workflow automation — browse tasks, gather context, launch Claude to implement fixes in isolated git worktrees, and create PRs.",
+  "icon": "command-icon-4.png",
   "author": "zerts",
   "license": "MIT",
   "commands": [
     {
       "name": "implement-task",
       "title": "Implement Task",
-      "description": "Browse JIRA tasks, gather context, and launch Claude Code to implement fixes",
+      "description": "Browse Linear tasks, gather context, and launch Claude Code to implement fixes",
       "mode": "view"
     },
     {
@@ -23,6 +23,24 @@
       "title": "Run Orchestration",
       "description": "Background worker for Claude Code orchestration",
       "mode": "no-view"
+    },
+    {
+      "name": "open-resources",
+      "title": "Open Resources",
+      "description": "Browse worktree folders and plan files, open in VS Code",
+      "mode": "view"
+    },
+    {
+      "name": "prepare-qa-note",
+      "title": "Prepare QA Note",
+      "description": "Generate QA release notes from Linear tasks grouped by release tags",
+      "mode": "view"
+    },
+    {
+      "name": "prepare-release-note",
+      "title": "Prepare Release Note",
+      "description": "Generate production release announcements with changelog and AI-powered pun",
+      "mode": "view"
     }
   ],
   "preferences": [
@@ -32,15 +50,23 @@
       "required": false,
       "title": "Claude Model",
       "description": "Which Claude model to use for code generation",
-      "default": "claude-sonnet-4-5-20250929",
+      "default": "claude-sonnet-4-6",
       "data": [
+        {
+          "title": "Sonnet 4.6",
+          "value": "claude-sonnet-4-6"
+        },
+        {
+          "title": "Opus 4.6",
+          "value": "claude-opus-4-6"
+        },
         {
           "title": "Sonnet 4.5",
           "value": "claude-sonnet-4-5-20250929"
         },
         {
-          "title": "Opus 4.5",
-          "value": "claude-opus-4-5-20251101"
+          "title": "Haiku 4.5",
+          "value": "claude-haiku-4-5-20251001"
         }
       ]
     }

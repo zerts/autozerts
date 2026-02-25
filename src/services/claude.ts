@@ -5,27 +5,54 @@ import {
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { getConfig } from "../utils/preferences";
+import { NODE_BIN_PATH } from "../config";
 import { updateTaskStatus, appendProgressLog } from "../utils/storage";
-import { createWorktree, installDependencies, commitAllChanges, pushBranch, getPlanFilePath, readPlanFile, ensurePlanFilesDir } from "./worktree";
-import { createPullRequest, addPRComment } from "./github";
-import { addComment as addJiraComment, issueUrl } from "./jira";
+import {
+  createWorktree,
+  installDependencies,
+  commitAllChanges,
+  pushBranch,
+  pullBranch,
+  getPlanFilePath,
+  readPlanFile,
+  ensurePlanFilesDir,
+} from "./worktree";
+import {
+  createPullRequest,
+  addPRComment,
+  fetchPullRequest,
+  fetchPRCommits,
+  getLastCommitDate,
+  markNewCommentsAsAddressed,
+} from "./github";
+import { addComment as addLinearComment, transitionIssue } from "./linear";
 import {
   buildImplementationPrompt,
   buildPlanPrompt,
+  buildPlanUpdatePrompt,
   buildFeedbackPrompt,
 } from "../utils/prompt-builder";
-import type { JiraIssue } from "../types/jira";
+import type { LinearIssue } from "../types/linear";
 import type { RepoConfig } from "../types/preferences";
 import type { TaskState } from "../types/storage";
-import { adfToMarkdown } from "../utils/adf-to-markdown";
+
+/** showToast silently fails in background no-view commands — guard every call. */
+async function safeShowToast(options: Toast.Options): Promise<void> {
+  try {
+    await showToast(options);
+  } catch {
+    // Toast API unavailable in background mode — ignore
+  }
+}
 
 interface OrchestrateParams {
-  issue: JiraIssue;
+  issue: LinearIssue;
   repo: RepoConfig;
   branchName: string;
   baseBranch: string;
   userInstructions: string;
   abortController?: AbortController;
+  updateExistingPlan?: boolean;
 }
 
 /**
@@ -43,37 +70,86 @@ export async function orchestrateImplementation(
     userInstructions,
     abortController,
   } = params;
-  const jiraKey = issue.key;
+  const issueKey = issue.identifier;
   const config = getConfig();
 
   const notify = (title: string, message?: string) =>
-    showToast({ style: Toast.Style.Animated, title, message });
+    safeShowToast({ style: Toast.Style.Animated, title, message });
 
   try {
     // Step 1: Create worktree
-    await notify(`${jiraKey}: Creating worktree`);
-    await appendProgressLog(jiraKey, "Creating git worktree...");
+    await notify(`${issueKey}: Creating worktree`);
+    await appendProgressLog(issueKey, "Creating git worktree...");
     const worktreePath = await createWorktree({ repo, branchName, baseBranch });
-    await updateTaskStatus(jiraKey, "worktree_created", { worktreePath });
-    await appendProgressLog(jiraKey, `Worktree created at ${worktreePath}`);
+    await updateTaskStatus(issueKey, "worktree_created", { worktreePath });
+    await appendProgressLog(issueKey, `Worktree created at ${worktreePath}`);
+
+    // Move Linear issue to In Progress
+    try {
+      await transitionIssue(issue.id, "In Progress");
+      await appendProgressLog(issueKey, "Linear issue moved to In Progress");
+    } catch {
+      await appendProgressLog(
+        issueKey,
+        "Warning: Failed to transition Linear issue to In Progress",
+      );
+    }
+
+    // Attach extra context to Linear as a comment
+    if (userInstructions.trim()) {
+      try {
+        await addLinearComment(
+          issue.id,
+          `**Claude Code — Extra Context:**\n\n${userInstructions.trim()}`,
+        );
+        await appendProgressLog(issueKey, "Extra context posted to Linear");
+      } catch {
+        await appendProgressLog(
+          issueKey,
+          "Warning: Failed to post extra context to Linear",
+        );
+      }
+    }
 
     // Step 2: Install dependencies
-    await notify(`${jiraKey}: Installing dependencies`);
-    await appendProgressLog(jiraKey, "Installing dependencies...");
+    await notify(`${issueKey}: Installing dependencies`);
+    await appendProgressLog(issueKey, "Installing dependencies...");
     await installDependencies(worktreePath);
-    await updateTaskStatus(jiraKey, "dependencies_installed");
-    await appendProgressLog(jiraKey, "Dependencies installed");
+    await updateTaskStatus(issueKey, "dependencies_installed");
+    await appendProgressLog(issueKey, "Dependencies installed");
 
-    // Step 3: Build prompt and run Claude
-    await notify(`${jiraKey}: Claude is implementing`);
-    await updateTaskStatus(jiraKey, "implementing");
-    await appendProgressLog(jiraKey, "Starting Claude Code implementation...");
+    // Step 3: Fetch Figma design context (if configured)
+    let figmaContext = "";
+    try {
+      const figmaDesigns = await fetchFigmaContext(issue);
+      if (figmaDesigns.length > 0) {
+        figmaContext = buildFigmaPromptSection(figmaDesigns);
+        await appendProgressLog(
+          issueKey,
+          `Found ${figmaDesigns.length} Figma design reference(s)`,
+        );
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await appendProgressLog(
+        issueKey,
+        `Warning: Figma fetch failed (${msg}). Continuing without design context.`,
+      );
+    }
+
+    // Step 4: Build prompt and run Claude
+    await notify(`${issueKey}: Claude is implementing`);
+    await updateTaskStatus(issueKey, "implementing");
+    await appendProgressLog(issueKey, "Starting Claude Code implementation...");
 
     // Check for an existing plan file and include it in the prompt
     const existingPlan = await readPlanFile(branchName);
     let extraInstructions = userInstructions;
     if (existingPlan) {
-      await appendProgressLog(jiraKey, "Found existing plan file — including in prompt");
+      await appendProgressLog(
+        issueKey,
+        "Found existing plan file — including in prompt",
+      );
       extraInstructions =
         (userInstructions ? userInstructions + "\n\n" : "") +
         "## Implementation Plan\n\n" +
@@ -83,51 +159,54 @@ export async function orchestrateImplementation(
 
     const prompt = buildImplementationPrompt({
       issue,
-      descriptionMarkdown: adfToMarkdown(issue.fields.description),
+      descriptionMarkdown: issue.description ?? "",
       userInstructions: extraInstructions,
       repoName: repo.name,
       baseBranch,
+      figmaContext,
     });
 
     const result = await runClaude({
       prompt,
       cwd: worktreePath,
       abortController,
-      onProgress: (entry) => appendProgressLog(jiraKey, entry),
+      onProgress: (entry) => appendProgressLog(issueKey, entry),
     });
 
     // Store session ID for potential resume
     const costUsd = result.costUsd ?? 0;
-    await updateTaskStatus(jiraKey, "implementation_complete", {
+    await updateTaskStatus(issueKey, "implementation_complete", {
       claudeSessionId: result.sessionId,
       costUsd,
     });
     await appendProgressLog(
-      jiraKey,
+      issueKey,
       `Implementation complete (cost: $${costUsd.toFixed(2)})`,
     );
 
     // Step 4: Commit any uncommitted changes, then push
-    await notify(`${jiraKey}: Committing & pushing`);
-    await updateTaskStatus(jiraKey, "pushing");
+    await notify(`${issueKey}: Committing & pushing`);
+    await updateTaskStatus(issueKey, "pushing");
     const didCommit = await commitAllChanges(worktreePath);
     if (didCommit) {
-      await appendProgressLog(jiraKey, "Committed remaining uncommitted changes");
+      await appendProgressLog(
+        issueKey,
+        "Committed remaining uncommitted changes",
+      );
     }
-    await appendProgressLog(jiraKey, "Pushing branch to origin...");
+    await appendProgressLog(issueKey, "Pushing branch to origin...");
     await pushBranch(worktreePath, branchName, repo.name);
-    await appendProgressLog(jiraKey, "Branch pushed");
+    await appendProgressLog(issueKey, "Branch pushed");
 
     // Step 5: Create PR
-    await notify(`${jiraKey}: Creating pull request`);
-    await appendProgressLog(jiraKey, "Creating pull request...");
-    const descriptionMd = adfToMarkdown(issue.fields.description);
+    await notify(`${issueKey}: Creating pull request`);
+    await appendProgressLog(issueKey, "Creating pull request...");
     const prBody = [
-      `## ${jiraKey}: ${issue.fields.summary}`,
+      `## ${issueKey}: ${issue.title}`,
       "",
-      descriptionMd ? descriptionMd.slice(0, 2000) : "",
+      issue.description ? issue.description.slice(0, 2000) : "",
       "",
-      `[JIRA Ticket](${issueUrl(jiraKey)})`,
+      `[Linear Issue](${issue.url})`,
       "",
       "---",
       `*Implemented by Claude Code (cost: $${costUsd.toFixed(2)})*`,
@@ -136,54 +215,71 @@ export async function orchestrateImplementation(
     const pr = await createPullRequest({
       owner: config.githubOwner,
       repo: repo.name,
-      title: `${jiraKey}: ${issue.fields.summary}`,
+      title: `${issueKey}: ${issue.title}`,
       body: prBody,
       head: branchName,
       base: baseBranch,
+      labels: ["auto"],
     });
 
-    await updateTaskStatus(jiraKey, "pr_created", {
+    await updateTaskStatus(issueKey, "pr_created", {
       prUrl: pr.html_url,
       prNumber: pr.number,
     });
-    await appendProgressLog(jiraKey, `PR created: ${pr.html_url}`);
+    await appendProgressLog(issueKey, `PR created: ${pr.html_url}`);
 
-    // Step 6: Add comment to JIRA
+    // Move Linear issue to In Review
     try {
-      await addJiraComment(jiraKey, `Pull request created: ${pr.html_url}`);
-      await appendProgressLog(jiraKey, "JIRA comment added");
+      await transitionIssue(issue.id, "In Review");
+      await appendProgressLog(issueKey, "Linear issue moved to In Review");
     } catch {
-      await appendProgressLog(jiraKey, "Warning: Failed to add JIRA comment");
+      await appendProgressLog(
+        issueKey,
+        "Warning: Failed to transition Linear issue to In Review",
+      );
+    }
+
+    // Step 6: Add comment to Linear
+    try {
+      await addLinearComment(issue.id, `Pull request created: ${pr.html_url}`);
+      await appendProgressLog(issueKey, "Linear comment added");
+    } catch {
+      await appendProgressLog(
+        issueKey,
+        "Warning: Failed to add Linear comment",
+      );
     }
 
     // Done
-    await updateTaskStatus(jiraKey, "complete");
-    await appendProgressLog(jiraKey, "Task complete!");
+    await updateTaskStatus(issueKey, "complete");
+    await appendProgressLog(issueKey, "Task complete!");
 
-    await showToast({
+    await safeShowToast({
       style: Toast.Style.Success,
-      title: `${jiraKey}: PR Created`,
+      title: `${issueKey}: PR Created`,
       message: pr.html_url,
     });
   } catch (error) {
     if (abortController?.signal.aborted) {
-      await updateTaskStatus(jiraKey, "cancelled");
-      await appendProgressLog(jiraKey, "Task cancelled by user");
-      await showToast({
+      await updateTaskStatus(issueKey, "cancelled");
+      await appendProgressLog(issueKey, "Task cancelled by user");
+      await safeShowToast({
         style: Toast.Style.Failure,
-        title: `${jiraKey}: Cancelled`,
+        title: `${issueKey}: Cancelled`,
       });
     } else {
       const message = error instanceof Error ? error.message : String(error);
-      await updateTaskStatus(jiraKey, "error", { error: message });
-      await appendProgressLog(jiraKey, `Error: ${message}`);
+      await updateTaskStatus(issueKey, "error", { error: message });
+      await appendProgressLog(issueKey, `Error: ${message}`);
 
-      await showToast({
+      await safeShowToast({
         style: Toast.Style.Failure,
-        title: `${jiraKey}: Implementation Failed`,
+        title: `${issueKey}: Implementation Failed`,
         message,
       });
     }
+  } finally {
+    await cleanupFigmaImages(issueKey);
   }
 }
 
@@ -194,85 +290,180 @@ export async function orchestrateImplementation(
 export async function orchestratePlan(
   params: OrchestrateParams,
 ): Promise<void> {
-  const { issue, repo, branchName, baseBranch, userInstructions, abortController } = params;
-  const jiraKey = issue.key;
+  const {
+    issue,
+    repo,
+    branchName,
+    baseBranch,
+    userInstructions,
+    abortController,
+    updateExistingPlan,
+  } = params;
+  const issueKey = issue.identifier;
 
   const notify = (title: string, message?: string) =>
-    showToast({ style: Toast.Style.Animated, title, message });
+    safeShowToast({ style: Toast.Style.Animated, title, message });
 
   try {
     // Step 1: Create worktree
-    await notify(`${jiraKey}: Creating worktree`);
-    await appendProgressLog(jiraKey, "Creating git worktree...");
+    await notify(`${issueKey}: Creating worktree`);
+    await appendProgressLog(issueKey, "Creating git worktree...");
     const worktreePath = await createWorktree({ repo, branchName, baseBranch });
-    await updateTaskStatus(jiraKey, "worktree_created", { worktreePath });
-    await appendProgressLog(jiraKey, `Worktree created at ${worktreePath}`);
+    await updateTaskStatus(issueKey, "worktree_created", { worktreePath });
+    await appendProgressLog(issueKey, `Worktree created at ${worktreePath}`);
+
+    // Move Linear issue to In Progress
+    try {
+      await transitionIssue(issue.id, "In Progress");
+      await appendProgressLog(issueKey, "Linear issue moved to In Progress");
+    } catch {
+      await appendProgressLog(
+        issueKey,
+        "Warning: Failed to transition Linear issue to In Progress",
+      );
+    }
+
+    // Attach extra context to Linear as a comment
+    if (userInstructions.trim()) {
+      try {
+        await addLinearComment(
+          issue.id,
+          `**Claude Code — Extra Context:**\n\n${userInstructions.trim()}`,
+        );
+        await appendProgressLog(issueKey, "Extra context posted to Linear");
+      } catch {
+        await appendProgressLog(
+          issueKey,
+          "Warning: Failed to post extra context to Linear",
+        );
+      }
+    }
 
     // Step 2: Install dependencies
-    await notify(`${jiraKey}: Installing dependencies`);
-    await appendProgressLog(jiraKey, "Installing dependencies...");
+    await notify(`${issueKey}: Installing dependencies`);
+    await appendProgressLog(issueKey, "Installing dependencies...");
     await installDependencies(worktreePath);
-    await updateTaskStatus(jiraKey, "dependencies_installed");
-    await appendProgressLog(jiraKey, "Dependencies installed");
+    await updateTaskStatus(issueKey, "dependencies_installed");
+    await appendProgressLog(issueKey, "Dependencies installed");
 
-    // Step 3: Run Claude in plan-only mode
-    await notify(`${jiraKey}: Claude is planning`);
-    await updateTaskStatus(jiraKey, "planning");
-    await appendProgressLog(jiraKey, "Starting Claude Code planning session...");
+    // Step 3: Fetch Figma design context (if configured)
+    let figmaContext = "";
+    try {
+      const figmaDesigns = await fetchFigmaContext(issue);
+      if (figmaDesigns.length > 0) {
+        figmaContext = buildFigmaPromptSection(figmaDesigns);
+        await appendProgressLog(
+          issueKey,
+          `Found ${figmaDesigns.length} Figma design reference(s)`,
+        );
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await appendProgressLog(
+        issueKey,
+        `Warning: Figma fetch failed (${msg}). Continuing without design context.`,
+      );
+    }
+
+    // Step 4: Run Claude in plan-only mode
+    await notify(`${issueKey}: Claude is planning`);
+    await updateTaskStatus(issueKey, "planning");
 
     await ensurePlanFilesDir();
     const planFilePath = getPlanFilePath(branchName);
 
-    const prompt = buildPlanPrompt({
-      issue,
-      descriptionMarkdown: adfToMarkdown(issue.fields.description),
-      userInstructions,
-      repoName: repo.name,
-      baseBranch,
-      planFilePath,
-    });
+    let prompt: string;
+    if (updateExistingPlan) {
+      const existingPlan = await readPlanFile(branchName);
+      if (existingPlan) {
+        await appendProgressLog(
+          issueKey,
+          "Updating existing plan based on feedback...",
+        );
+        prompt = buildPlanUpdatePrompt({
+          issue,
+          descriptionMarkdown: issue.description ?? "",
+          userInstructions,
+          repoName: repo.name,
+          baseBranch,
+          planFilePath,
+          existingPlan,
+          figmaContext,
+        });
+      } else {
+        await appendProgressLog(
+          issueKey,
+          "No existing plan found, creating new plan...",
+        );
+        prompt = buildPlanPrompt({
+          issue,
+          descriptionMarkdown: issue.description ?? "",
+          userInstructions,
+          repoName: repo.name,
+          baseBranch,
+          planFilePath,
+          figmaContext,
+        });
+      }
+    } else {
+      await appendProgressLog(
+        issueKey,
+        "Starting Claude Code planning session...",
+      );
+      prompt = buildPlanPrompt({
+        issue,
+        descriptionMarkdown: issue.description ?? "",
+        userInstructions,
+        repoName: repo.name,
+        baseBranch,
+        planFilePath,
+        figmaContext,
+      });
+    }
 
     const result = await runClaude({
       prompt,
       cwd: worktreePath,
       abortController,
-      onProgress: (entry) => appendProgressLog(jiraKey, entry),
+      onProgress: (entry) => appendProgressLog(issueKey, entry),
     });
 
     const costUsd = result.costUsd ?? 0;
-    await updateTaskStatus(jiraKey, "plan_complete", {
+    await updateTaskStatus(issueKey, "plan_complete", {
       claudeSessionId: result.sessionId,
       costUsd,
     });
     await appendProgressLog(
-      jiraKey,
+      issueKey,
       `Plan complete (cost: $${costUsd.toFixed(2)}). Plan file: ${planFilePath}`,
     );
 
-    await showToast({
+    await safeShowToast({
       style: Toast.Style.Success,
-      title: `${jiraKey}: Plan Ready`,
+      title: `${issueKey}: Plan Ready`,
       message: "Review the plan, then launch implementation.",
     });
   } catch (error) {
     if (abortController?.signal.aborted) {
-      await updateTaskStatus(jiraKey, "cancelled");
-      await appendProgressLog(jiraKey, "Task cancelled by user");
-      await showToast({
+      await updateTaskStatus(issueKey, "cancelled");
+      await appendProgressLog(issueKey, "Task cancelled by user");
+      await safeShowToast({
         style: Toast.Style.Failure,
-        title: `${jiraKey}: Cancelled`,
+        title: `${issueKey}: Cancelled`,
       });
     } else {
       const message = error instanceof Error ? error.message : String(error);
-      await updateTaskStatus(jiraKey, "error", { error: message });
-      await appendProgressLog(jiraKey, `Error: ${message}`);
+      await updateTaskStatus(issueKey, "error", { error: message });
+      await appendProgressLog(issueKey, `Error: ${message}`);
 
-      await showToast({
+      await safeShowToast({
         style: Toast.Style.Failure,
-        title: `${jiraKey}: Planning Failed`,
+        title: `${issueKey}: Planning Failed`,
         message,
       });
     }
+  } finally {
+    await cleanupFigmaImages(issueKey);
   }
 }
 
@@ -284,21 +475,29 @@ export async function orchestrateFeedback(params: {
   repo: RepoConfig;
   feedbackText: string;
   postAsComment: boolean;
+  newCommentsContext?: string;
   abortController?: AbortController;
 }): Promise<void> {
-  const { task, repo, feedbackText, postAsComment, abortController } = params;
-  const jiraKey = task.jiraKey;
+  const {
+    task,
+    repo,
+    feedbackText,
+    postAsComment,
+    newCommentsContext,
+    abortController,
+  } = params;
+  const issueKey = task.issueKey;
 
   try {
     // Post comment to GitHub if requested
-    if (postAsComment && task.prNumber) {
+    if (postAsComment && feedbackText.trim().length > 0 && task.prNumber) {
       await addPRComment(
         getConfig().githubOwner,
         repo.name,
         task.prNumber,
         feedbackText,
       );
-      await appendProgressLog(jiraKey, "Feedback posted as GitHub comment");
+      await appendProgressLog(issueKey, "Feedback posted as GitHub comment");
     }
 
     // Ensure worktree exists
@@ -308,23 +507,61 @@ export async function orchestrateFeedback(params: {
       await fs.access(worktreePath);
     } catch {
       // Recreate worktree
-      await appendProgressLog(jiraKey, "Recreating worktree...");
+      await appendProgressLog(issueKey, "Recreating worktree...");
       worktreePath = await createWorktree({
         repo,
         branchName: task.branchName,
         baseBranch: task.baseBranch,
       });
-      await updateTaskStatus(jiraKey, "worktree_created", { worktreePath });
+      await updateTaskStatus(issueKey, "worktree_created", { worktreePath });
+    }
+
+    // Commit any uncommitted local changes first
+    const hadLocalChanges = await commitAllChanges(worktreePath);
+    if (hadLocalChanges) {
+      await appendProgressLog(issueKey, "Committed uncommitted local changes");
+    }
+
+    // Pull latest changes from origin (with rebase)
+    await appendProgressLog(issueKey, "Pulling latest changes from origin...");
+    try {
+      await pullBranch(worktreePath, task.branchName, repo.name);
+      await appendProgressLog(issueKey, "Branch synced with origin");
+    } catch (pullError) {
+      const msg =
+        pullError instanceof Error ? pullError.message : String(pullError);
+      await appendProgressLog(
+        issueKey,
+        `Warning: Pull failed (${msg}). Continuing with local state.`,
+      );
+    }
+
+    // Capture the last commit date before Claude makes changes (for marking comments later)
+    let commentCutoffDate: string | null = null;
+    let prAuthor: string | null = null;
+    if (task.prNumber) {
+      try {
+        const config = getConfig();
+        const [pr, commits] = await Promise.all([
+          fetchPullRequest(config.githubOwner, repo.name, task.prNumber),
+          fetchPRCommits(config.githubOwner, repo.name, task.prNumber),
+        ]);
+        prAuthor = pr.user.login;
+        commentCutoffDate = getLastCommitDate(commits);
+      } catch {
+        // Ignore - we'll skip marking comments
+      }
     }
 
     // Run Claude with feedback prompt
-    await updateTaskStatus(jiraKey, "feedback_implementing");
-    await appendProgressLog(jiraKey, "Starting Claude Code for feedback...");
+    await updateTaskStatus(issueKey, "feedback_implementing");
+    await appendProgressLog(issueKey, "Starting Claude Code for feedback...");
 
     const prompt = buildFeedbackPrompt({
-      jiraKey,
+      issueKey,
       prNumber: task.prNumber ?? 0,
       feedbackText,
+      newCommentsContext,
     });
 
     const result = await runClaude({
@@ -332,45 +569,77 @@ export async function orchestrateFeedback(params: {
       cwd: worktreePath,
       resumeSessionId: task.claudeSessionId,
       abortController,
-      onProgress: (entry) => appendProgressLog(jiraKey, entry),
+      onProgress: (entry) => appendProgressLog(issueKey, entry),
     });
 
     const costUsd = (task.costUsd ?? 0) + (result.costUsd ?? 0);
-    await updateTaskStatus(jiraKey, "pushing", {
+    await updateTaskStatus(issueKey, "pushing", {
       costUsd,
       claudeSessionId: result.sessionId,
     });
-    await appendProgressLog(jiraKey, "Feedback implemented, committing & pushing...");
+    await appendProgressLog(
+      issueKey,
+      "Feedback implemented, committing & pushing...",
+    );
 
     // Commit any uncommitted changes, then push (PR auto-updates)
     const didCommit = await commitAllChanges(worktreePath);
     if (didCommit) {
-      await appendProgressLog(jiraKey, "Committed remaining uncommitted changes");
+      await appendProgressLog(
+        issueKey,
+        "Committed remaining uncommitted changes",
+      );
     }
     await pushBranch(worktreePath, task.branchName, repo.name);
-    await updateTaskStatus(jiraKey, "complete");
-    await appendProgressLog(jiraKey, "Feedback changes pushed");
+    await appendProgressLog(issueKey, "Feedback changes pushed");
 
-    await showToast({
+    // Mark addressed comments with a reaction
+    if (task.prNumber && prAuthor && commentCutoffDate) {
+      try {
+        const config = getConfig();
+        const markedCount = await markNewCommentsAsAddressed(
+          config.githubOwner,
+          repo.name,
+          task.prNumber,
+          prAuthor,
+          commentCutoffDate,
+        );
+        if (markedCount > 0) {
+          await appendProgressLog(
+            issueKey,
+            `Marked ${markedCount} comment(s) as addressed`,
+          );
+        }
+      } catch {
+        await appendProgressLog(
+          issueKey,
+          "Warning: Could not mark comments as addressed",
+        );
+      }
+    }
+
+    await updateTaskStatus(issueKey, "complete");
+
+    await safeShowToast({
       style: Toast.Style.Success,
       title: "Feedback Implemented",
       message: `Changes pushed to ${task.branchName}`,
     });
   } catch (error) {
     if (abortController?.signal.aborted) {
-      await updateTaskStatus(jiraKey, "cancelled");
-      await appendProgressLog(jiraKey, "Task cancelled by user");
-      await showToast({
+      await updateTaskStatus(issueKey, "cancelled");
+      await appendProgressLog(issueKey, "Task cancelled by user");
+      await safeShowToast({
         style: Toast.Style.Failure,
         title: "Feedback Cancelled",
-        message: jiraKey,
+        message: issueKey,
       });
     } else {
       const message = error instanceof Error ? error.message : String(error);
-      await updateTaskStatus(jiraKey, "error", { error: message });
-      await appendProgressLog(jiraKey, `Error: ${message}`);
+      await updateTaskStatus(issueKey, "error", { error: message });
+      await appendProgressLog(issueKey, `Error: ${message}`);
 
-      await showToast({
+      await safeShowToast({
         style: Toast.Style.Failure,
         title: "Feedback Implementation Failed",
         message,
@@ -400,7 +669,7 @@ async function runClaude(params: RunClaudeParams): Promise<ClaudeResult> {
   // internal resolution of its bundled cli.js. Point to the globally installed
   // CLI script directly. We also inject nvm's node into PATH so the
   // #!/usr/bin/env node shebang resolves correctly.
-  const NVM_BIN = "/Users/zerts/.nvm/versions/node/v22.14.0/bin";
+  const NVM_BIN = NODE_BIN_PATH;
   const executablePath = `${NVM_BIN}/../lib/node_modules/@anthropic-ai/claude-code/cli.js`;
 
   const stderrChunks: string[] = [];
@@ -411,8 +680,8 @@ async function runClaude(params: RunClaudeParams): Promise<ClaudeResult> {
   // instead of the user's personal git config.
   const env: Record<string, string | undefined> = {
     ...process.env,
-    HOME: process.env.HOME ?? `/Users/${process.env.USER ?? "zerts"}`,
-    USER: process.env.USER ?? "zerts",
+    HOME: process.env.HOME ?? `/Users/${process.env.USER}`,
+    USER: process.env.USER,
     PATH: `${NVM_BIN}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`,
     GIT_AUTHOR_NAME: config.gitAuthorName,
     GIT_AUTHOR_EMAIL: config.gitAuthorEmail,
@@ -431,7 +700,9 @@ async function runClaude(params: RunClaudeParams): Promise<ClaudeResult> {
       model: config.claudeModel,
       env,
       stderr: (data: string) => stderrChunks.push(data),
-      ...(params.abortController ? { abortController: params.abortController } : {}),
+      ...(params.abortController
+        ? { abortController: params.abortController }
+        : {}),
       ...(params.resumeSessionId ? { resume: params.resumeSessionId } : {}),
     },
   };
@@ -483,7 +754,9 @@ async function processSDKMessage(
     case "system": {
       if (message.subtype === "init") {
         const init = message as Extract<SDKMessage, { subtype: "init" }>;
-        await onProgress(`[init] Session started — model: ${init.model}, tools: ${init.tools.length}`);
+        await onProgress(
+          `[init] Session started — model: ${init.model}, tools: ${init.tools.length}`,
+        );
       }
       break;
     }
@@ -495,10 +768,11 @@ async function processSDKMessage(
         if (block.type === "text" && block.text?.trim()) {
           const text = block.text.trim();
           // Show first 300 chars of Claude's text to keep log readable
-          const truncated = text.length > 300 ? text.slice(0, 300) + "..." : text;
+          const truncated =
+            text.length > 300 ? text.slice(0, 300) + "..." : text;
           await onProgress(`[claude] ${truncated}`);
         }
-        if (block.type === "tool_use") {
+        if (block.type === "tool_use" && block.name) {
           await onProgress(formatToolUse(block.name, block.input));
         }
       }
@@ -535,6 +809,38 @@ interface ContentBlock {
   id?: string;
   input?: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Figma design context helpers (stub — no Figma integration configured yet)
+// ---------------------------------------------------------------------------
+
+interface FigmaDesign {
+  url: string;
+  name: string;
+  imageBase64: string;
+}
+
+async function fetchFigmaContext(_issue: LinearIssue): Promise<FigmaDesign[]> {
+  // TODO: implement Figma API integration when needed
+  return [];
+}
+
+function buildFigmaPromptSection(designs: FigmaDesign[]): string {
+  if (designs.length === 0) return "";
+  const lines = ["## Figma Designs", ""];
+  for (const d of designs) {
+    lines.push(`### ${d.name}`);
+    lines.push(`URL: ${d.url}`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+async function cleanupFigmaImages(_issueKey: string): Promise<void> {
+  // no-op until Figma integration is implemented
+}
+
+// ---------------------------------------------------------------------------
 
 function formatToolUse(
   toolName: string,

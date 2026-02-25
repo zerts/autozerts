@@ -1,12 +1,12 @@
 /** LocalStorage task state types */
 
-import type { JiraIssue } from "./jira";
+import type { LinearIssue } from "./linear";
 
 // Orchestration params passed to the background no-view command via LocalStorage
 
 export interface OrchestrationImplementParams {
   mode: "implement";
-  issue: JiraIssue;
+  issue: LinearIssue;
   repoName: string;
   branchName: string;
   baseBranch: string;
@@ -15,19 +15,21 @@ export interface OrchestrationImplementParams {
 
 export interface OrchestrationPlanParams {
   mode: "plan";
-  issue: JiraIssue;
+  issue: LinearIssue;
   repoName: string;
   branchName: string;
   baseBranch: string;
   userInstructions: string;
+  updateExistingPlan?: boolean;
 }
 
 export interface OrchestrationFeedbackParams {
   mode: "feedback";
-  jiraKey: string;
+  issueKey: string;
   repoName: string;
   feedbackText: string;
   postAsComment: boolean;
+  newCommentsContext?: string;
 }
 
 export type OrchestrationParams =
@@ -52,9 +54,9 @@ export type TaskStatus =
 
 export interface TaskState {
   taskId: string;
-  jiraKey: string;
-  jiraSummary: string;
-  jiraUrl: string;
+  issueKey: string;
+  issueSummary: string;
+  issueUrl: string;
   repoName: string;
   branchName: string;
   worktreePath: string;

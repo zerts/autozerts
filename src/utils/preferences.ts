@@ -7,13 +7,14 @@ import type {
   RaycastPreferences,
   RepoConfig,
 } from "../types/preferences";
+import { FALLBACK_ENV_PATH } from "../config";
 
 let cachedConfig: AppConfig | null = null;
 
 function loadEnv(): Record<string, string> {
   const candidates = [
     path.resolve(environment.assetsPath, "..", ".env"),
-    "/Users/zerts/Work/autozerts/raycast-extension/.env",
+    FALLBACK_ENV_PATH,
   ];
 
   for (const candidate of candidates) {
@@ -36,7 +37,12 @@ function parseRepos(raw: string | undefined): RepoConfig[] {
       .filter(
         (
           r: unknown,
-        ): r is { name: string; localPath: string; defaultBranch?: string } =>
+        ): r is {
+          name: string;
+          localPath: string;
+          defaultBranch?: string;
+          issuePrefixes?: string[];
+        } =>
           typeof r === "object" &&
           r !== null &&
           typeof (r as RepoConfig).name === "string" &&
@@ -46,6 +52,9 @@ function parseRepos(raw: string | undefined): RepoConfig[] {
         name: r.name,
         localPath: r.localPath,
         defaultBranch: r.defaultBranch ?? "main",
+        issuePrefixes: Array.isArray(r.issuePrefixes)
+          ? r.issuePrefixes.filter((p: unknown) => typeof p === "string")
+          : [],
       }));
   } catch {
     return [];
@@ -59,22 +68,19 @@ export function getConfig(): AppConfig {
   const prefs = getPreferenceValues<RaycastPreferences>();
 
   cachedConfig = {
-    jiraBaseUrl: env.JIRA_BASE_URL ?? "",
-    jiraEmail: env.JIRA_EMAIL ?? "",
-    jiraApiToken: env.JIRA_API_TOKEN ?? "",
-    jiraProjectKeys: (env.JIRA_PROJECT_KEYS ?? "").split(",").filter(Boolean),
+    linearApiKey: env.LINEAR_API_KEY ?? "",
     githubToken: env.GITHUB_TOKEN ?? "",
     githubOwner: env.GITHUB_OWNER ?? "",
     repos: parseRepos(env.REPOS),
+    extensionQaRepoPath: env.EXTENSION_QA_REPO_PATH ?? "",
     worktreeBasePath: env.WORKTREE_BASE_PATH ?? "",
     planFilesPath: env.PLAN_FILES_PATH ?? "",
+    logFilesPath: env.LOG_FILES_PATH ?? "",
     claudeMaxTurns: parseInt(env.CLAUDE_MAX_TURNS ?? "200", 10),
     claudeMaxBudgetUsd: parseFloat(env.CLAUDE_MAX_BUDGET_USD ?? "5.00"),
-    claudeModel:
-      prefs.claudeModel ?? env.CLAUDE_MODEL ?? "claude-sonnet-4-5-20250929",
+    claudeModel: prefs.claudeModel ?? env.CLAUDE_MODEL ?? "claude-sonnet-4-6",
     gitAuthorName: env.GIT_AUTHOR_NAME ?? "AutoZerts",
-    gitAuthorEmail:
-      env.GIT_AUTHOR_EMAIL ?? "autozerts@noreply.github.com",
+    gitAuthorEmail: env.GIT_AUTHOR_EMAIL ?? "autozerts@noreply.github.com",
   };
 
   return cachedConfig;

@@ -8,6 +8,9 @@ dist/
 .env
 .env.local
 
+# Local configuration (copy config.example.ts → config.ts and fill in your values)
+src/config.ts
+
 # Raycast
 .raycast/
 

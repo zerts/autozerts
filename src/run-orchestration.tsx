@@ -1,4 +1,12 @@
 import { LaunchProps, showToast, Toast } from "@raycast/api";
+
+async function safeShowToast(options: Toast.Options): Promise<void> {
+  try {
+    await showToast(options);
+  } catch {
+    // Toast API unavailable in background mode — ignore
+  }
+}
 import {
   getOrchestrationParams,
   saveOrchestrationParams,
@@ -10,24 +18,35 @@ import {
   updateTaskStatus,
 } from "./utils/storage";
 import { getConfig } from "./utils/preferences";
-import { orchestrateImplementation, orchestratePlan, orchestrateFeedback } from "./services/claude";
+import {
+  orchestrateImplementation,
+  orchestratePlan,
+  orchestrateFeedback,
+} from "./services/claude";
 
 interface LaunchContext {
-  jiraKey: string;
+  issueKey: string;
 }
 
 export default async function RunOrchestration(
   props: LaunchProps<{ launchContext: LaunchContext }>,
 ) {
-  const jiraKey = props.launchContext?.jiraKey;
-  if (!jiraKey) {
-    await showToast({ style: Toast.Style.Failure, title: "No jiraKey in launch context" });
+  const issueKey = props.launchContext?.issueKey;
+  if (!issueKey) {
+    await safeShowToast({
+      style: Toast.Style.Failure,
+      title: "No issueKey in launch context",
+    });
     return;
   }
 
-  const params = await getOrchestrationParams(jiraKey);
+  const params = await getOrchestrationParams(issueKey);
   if (!params) {
-    await showToast({ style: Toast.Style.Failure, title: "No orchestration params found", message: jiraKey });
+    await safeShowToast({
+      style: Toast.Style.Failure,
+      title: "No orchestration params found",
+      message: issueKey,
+    });
     return;
   }
 
@@ -35,7 +54,7 @@ export default async function RunOrchestration(
 
   // Poll for cancellation every 2s
   const cancelInterval = setInterval(async () => {
-    if (await isCancellationRequested(jiraKey)) {
+    if (await isCancellationRequested(issueKey)) {
       abortController.abort();
       clearInterval(cancelInterval);
     }
@@ -46,7 +65,11 @@ export default async function RunOrchestration(
       const config = getConfig();
       const repo = config.repos.find((r) => r.name === params.repoName);
       if (!repo) {
-        await showToast({ style: Toast.Style.Failure, title: "Repository not found", message: params.repoName });
+        await safeShowToast({
+          style: Toast.Style.Failure,
+          title: "Repository not found",
+          message: params.repoName,
+        });
         return;
       }
 
@@ -57,10 +80,11 @@ export default async function RunOrchestration(
         baseBranch: params.baseBranch,
         userInstructions: params.userInstructions,
         abortController,
+        updateExistingPlan: params.updateExistingPlan,
       });
 
       // Keep params but switch mode so "Implement Plan" can re-launch
-      await saveOrchestrationParams(jiraKey, {
+      await saveOrchestrationParams(issueKey, {
         mode: "implement",
         issue: params.issue,
         repoName: params.repoName,
@@ -72,7 +96,11 @@ export default async function RunOrchestration(
       const config = getConfig();
       const repo = config.repos.find((r) => r.name === params.repoName);
       if (!repo) {
-        await showToast({ style: Toast.Style.Failure, title: "Repository not found", message: params.repoName });
+        await safeShowToast({
+          style: Toast.Style.Failure,
+          title: "Repository not found",
+          message: params.repoName,
+        });
         return;
       }
 
@@ -88,13 +116,21 @@ export default async function RunOrchestration(
       const config = getConfig();
       const repo = config.repos.find((r) => r.name === params.repoName);
       if (!repo) {
-        await showToast({ style: Toast.Style.Failure, title: "Repository not found", message: params.repoName });
+        await safeShowToast({
+          style: Toast.Style.Failure,
+          title: "Repository not found",
+          message: params.repoName,
+        });
         return;
       }
 
-      const task = await getTask(params.jiraKey);
+      const task = await getTask(params.issueKey);
       if (!task) {
-        await showToast({ style: Toast.Style.Failure, title: "Task state not found", message: params.jiraKey });
+        await safeShowToast({
+          style: Toast.Style.Failure,
+          title: "Task state not found",
+          message: params.issueKey,
+        });
         return;
       }
 
@@ -103,14 +139,19 @@ export default async function RunOrchestration(
         repo,
         feedbackText: params.feedbackText,
         postAsComment: params.postAsComment,
+        newCommentsContext: params.newCommentsContext,
         abortController,
       });
     }
   } catch (error) {
     if (abortController.signal.aborted) {
-      await updateTaskStatus(jiraKey, "cancelled");
-      await appendProgressLog(jiraKey, "Task cancelled by user");
-      await showToast({ style: Toast.Style.Failure, title: "Task Cancelled", message: jiraKey });
+      await updateTaskStatus(issueKey, "cancelled");
+      await appendProgressLog(issueKey, "Task cancelled by user");
+      await safeShowToast({
+        style: Toast.Style.Failure,
+        title: "Task Cancelled",
+        message: issueKey,
+      });
     } else {
       throw error;
     }
@@ -119,8 +160,8 @@ export default async function RunOrchestration(
     // After plan mode, params are kept (switched to implement) for "Implement Plan".
     // For all other modes, clean up.
     if (params.mode !== "plan") {
-      await clearOrchestrationParams(jiraKey);
+      await clearOrchestrationParams(issueKey);
     }
-    await clearCancellation(jiraKey);
+    await clearCancellation(issueKey);
   }
 }

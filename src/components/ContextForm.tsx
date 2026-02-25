@@ -9,32 +9,72 @@ import {
   launchCommand,
   LaunchType,
 } from "@raycast/api";
-import { useState } from "react";
-import type { JiraIssue } from "../types/jira";
+import { useState, useEffect } from "react";
+import type { LinearIssue } from "../types/linear";
 import { getConfig } from "../utils/preferences";
 import { generateBranchName } from "../utils/branch-naming";
-import { getWorktreePath } from "../services/worktree";
-import { createInitialTaskState, saveTask, saveOrchestrationParams } from "../utils/storage";
-import { issueUrl } from "../services/jira";
+import { getWorktreePath, getPlanFilePath } from "../services/worktree";
+import {
+  createInitialTaskState,
+  saveTask,
+  saveOrchestrationParams,
+} from "../utils/storage";
 import { ExecutionProgress } from "./ExecutionProgress";
 
 interface ContextFormProps {
-  issue: JiraIssue;
+  issue: LinearIssue;
   descriptionMarkdown: string;
+}
+
+function findDefaultRepo(
+  title: string,
+  repos: ReturnType<typeof getConfig>["repos"],
+): string | undefined {
+  const lower = title.toLowerCase();
+  const repo = repos.find((r) =>
+    r.issuePrefixes.some((p) => lower.includes(p.toLowerCase())),
+  );
+  return repo?.name;
 }
 
 export function ContextForm({ issue, descriptionMarkdown }: ContextFormProps) {
   const config = getConfig();
   const { push } = useNavigation();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [planModeEnabled, setPlanModeEnabled] = useState(false);
+  const [existingPlanExists, setExistingPlanExists] = useState(false);
 
+  const defaultRepo = findDefaultRepo(issue.title, config.repos);
   const contextSummary = buildContextSummary(issue, descriptionMarkdown);
+
+  // Check if plan file exists when plan mode is enabled
+  useEffect(() => {
+    if (!planModeEnabled) {
+      setExistingPlanExists(false);
+      return;
+    }
+
+    async function checkPlanExists() {
+      const branchName = generateBranchName(issue.title, issue.identifier);
+      const planPath = getPlanFilePath(branchName);
+      try {
+        const fs = await import("fs/promises");
+        await fs.access(planPath);
+        setExistingPlanExists(true);
+      } catch {
+        setExistingPlanExists(false);
+      }
+    }
+
+    checkPlanExists();
+  }, [planModeEnabled, issue.title, issue.identifier]);
 
   async function handleSubmit(values: {
     repoName: string;
     baseBranch: string;
     extraInstructions: string;
     planModeFirst: boolean;
+    updateExistingPlan: boolean;
   }) {
     setIsSubmitting(true);
 
@@ -63,15 +103,15 @@ export function ContextForm({ issue, descriptionMarkdown }: ContextFormProps) {
         return;
       }
 
-      const branchName = generateBranchName(issue.fields.summary, issue.key);
+      const branchName = generateBranchName(issue.title, issue.identifier);
       const baseBranch = values.baseBranch || repo.defaultBranch;
       const wtPath = getWorktreePath(repo.name, branchName);
 
-      // Create initial task state
+      // Create initial task state in file storage
       const taskState = createInitialTaskState({
-        jiraKey: issue.key,
-        jiraSummary: issue.fields.summary,
-        jiraUrl: issueUrl(issue.key),
+        issueKey: issue.identifier,
+        issueSummary: issue.title,
+        issueUrl: issue.url,
         repoName: repo.name,
         branchName,
         worktreePath: wtPath,
@@ -80,28 +120,36 @@ export function ContextForm({ issue, descriptionMarkdown }: ContextFormProps) {
       await saveTask(taskState);
 
       // Navigate to progress view
-      push(<ExecutionProgress jiraKey={issue.key} />);
+      push(<ExecutionProgress issueKey={issue.identifier} />);
 
-      // Save params and launch background orchestration command
+      // Write orch params to file, then spawn the worker as a detached process.
+      // Each task gets its own independent process — no Raycast timeout, no
+      // singleton constraint, unlimited parallelism.
       const mode = values.planModeFirst ? "plan" : "implement";
-      await saveOrchestrationParams(issue.key, {
+      await saveOrchestrationParams(issue.identifier, {
         mode,
         issue,
         repoName: repo.name,
         branchName,
         baseBranch,
         userInstructions: values.extraInstructions,
+        ...(mode === "plan" && {
+          updateExistingPlan: values.updateExistingPlan,
+        }),
       } as import("../types/storage").OrchestrationParams);
+
       await launchCommand({
         name: "run-orchestration",
         type: LaunchType.UserInitiated,
-        context: { jiraKey: issue.key },
+        context: { issueKey: issue.identifier },
       });
 
       await showToast({
         style: Toast.Style.Animated,
-        title: values.planModeFirst ? "Planning started" : "Implementation started",
-        message: `${issue.key} → ${repo.name}`,
+        title: values.planModeFirst
+          ? "Planning started"
+          : "Implementation started",
+        message: `${issue.identifier} → ${repo.name}`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -130,10 +178,14 @@ export function ContextForm({ issue, descriptionMarkdown }: ContextFormProps) {
     >
       <Form.Description
         title="Task"
-        text={`${issue.key}: ${issue.fields.summary}`}
+        text={`${issue.identifier}: ${issue.title}`}
       />
 
-      <Form.Dropdown id="repoName" title="Target Repository">
+      <Form.Dropdown
+        id="repoName"
+        title="Target Repository"
+        defaultValue={defaultRepo}
+      >
         {config.repos.map((repo) => (
           <Form.Dropdown.Item
             key={repo.name}
@@ -163,21 +215,31 @@ export function ContextForm({ issue, descriptionMarkdown }: ContextFormProps) {
         id="planModeFirst"
         label="Plan Mode first"
         defaultValue={false}
+        onChange={setPlanModeEnabled}
       />
+
+      {planModeEnabled && existingPlanExists && (
+        <Form.Checkbox
+          id="updateExistingPlan"
+          label="Update existing plan"
+          defaultValue={true}
+        />
+      )}
     </Form>
   );
 }
 
-function buildContextSummary(issue: JiraIssue, descriptionMd: string): string {
+function buildContextSummary(
+  issue: LinearIssue,
+  descriptionMd: string,
+): string {
   const parts: string[] = [];
-  parts.push(
-    `JIRA: ${issue.key} (${issue.fields.issuetype.name}, ${issue.fields.priority.name})`,
-  );
+  parts.push(`Linear: ${issue.identifier} (${issue.priorityLabel})`);
   parts.push(
     `Description: ${descriptionMd ? `${descriptionMd.length} chars` : "none"}`,
   );
-  if (issue.fields.comment?.total) {
-    parts.push(`JIRA comments: ${issue.fields.comment.total}`);
+  if (issue.comments?.nodes?.length) {
+    parts.push(`Comments: ${issue.comments.nodes.length}`);
   }
   return parts.join("\n");
 }

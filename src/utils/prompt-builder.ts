@@ -1,50 +1,51 @@
-import type { JiraIssue } from "../types/jira";
-import { adfToMarkdown } from "./adf-to-markdown";
+import type { LinearIssue } from "../types/linear";
 
 interface PromptContext {
-  issue: JiraIssue;
+  issue: LinearIssue;
   descriptionMarkdown: string;
   userInstructions: string;
   repoName: string;
   baseBranch: string;
+  figmaContext?: string;
 }
 
-/**
- * Build the main implementation prompt for Claude Code.
- */
-export function buildImplementationPrompt(ctx: PromptContext): string {
+function buildIssueHeader(ctx: PromptContext): string[] {
   const sections: string[] = [];
 
-  sections.push(`# Task: ${ctx.issue.key} — ${ctx.issue.fields.summary}`);
+  sections.push(`# Task: ${ctx.issue.identifier} — ${ctx.issue.title}`);
   sections.push("");
-  sections.push(`**Type:** ${ctx.issue.fields.issuetype.name}`);
-  sections.push(`**Priority:** ${ctx.issue.fields.priority.name}`);
-  sections.push(`**Status:** ${ctx.issue.fields.status.name}`);
+  sections.push(`**Priority:** ${ctx.issue.priorityLabel}`);
+  sections.push(`**Status:** ${ctx.issue.state.name}`);
   sections.push(`**Repository:** ${ctx.repoName}`);
   sections.push(`**Base branch:** ${ctx.baseBranch}`);
   sections.push("");
 
-  // JIRA description
+  // Linear description
   if (ctx.descriptionMarkdown) {
-    sections.push("## JIRA Description");
+    sections.push("## Description");
     sections.push("");
     sections.push(ctx.descriptionMarkdown);
     sections.push("");
   }
 
-  // JIRA comments
-  const comments = ctx.issue.fields.comment?.comments;
+  // Linear comments
+  const comments = ctx.issue.comments?.nodes;
   if (comments && comments.length > 0) {
-    sections.push("## JIRA Comments");
+    sections.push("## Comments");
     sections.push("");
     for (const comment of comments) {
-      const author = comment.author.displayName;
-      const date = new Date(comment.created).toLocaleDateString();
-      const body = adfToMarkdown(comment.body);
+      const author = comment.user?.name ?? "Unknown";
+      const date = new Date(comment.createdAt).toLocaleDateString();
       sections.push(`**${author}** (${date}):`);
-      sections.push(body);
+      sections.push(comment.body);
       sections.push("");
     }
+  }
+
+  // Figma design context
+  if (ctx.figmaContext) {
+    sections.push(ctx.figmaContext);
+    sections.push("");
   }
 
   // User instructions
@@ -55,7 +56,15 @@ export function buildImplementationPrompt(ctx: PromptContext): string {
     sections.push("");
   }
 
-  // Task instructions
+  return sections;
+}
+
+/**
+ * Build the main implementation prompt for Claude Code.
+ */
+export function buildImplementationPrompt(ctx: PromptContext): string {
+  const sections = buildIssueHeader(ctx);
+
   sections.push("## Your Task");
   sections.push("");
   sections.push(
@@ -66,6 +75,7 @@ export function buildImplementationPrompt(ctx: PromptContext): string {
   );
   sections.push("- Follow the existing code style and conventions");
   sections.push("- Write clean, well-tested code");
+  sections.push("- Before every commit, run `npx prettier --write` on all changed files");
   sections.push("- Make focused commits with clear messages");
   sections.push("- If tests exist, make sure they pass after your changes");
   sections.push("- Do not modify files unrelated to the task");
@@ -81,49 +91,8 @@ export function buildImplementationPrompt(ctx: PromptContext): string {
 export function buildPlanPrompt(
   ctx: PromptContext & { planFilePath: string },
 ): string {
-  const sections: string[] = [];
+  const sections = buildIssueHeader(ctx);
 
-  sections.push(`# Task: ${ctx.issue.key} — ${ctx.issue.fields.summary}`);
-  sections.push("");
-  sections.push(`**Type:** ${ctx.issue.fields.issuetype.name}`);
-  sections.push(`**Priority:** ${ctx.issue.fields.priority.name}`);
-  sections.push(`**Status:** ${ctx.issue.fields.status.name}`);
-  sections.push(`**Repository:** ${ctx.repoName}`);
-  sections.push(`**Base branch:** ${ctx.baseBranch}`);
-  sections.push("");
-
-  // JIRA description
-  if (ctx.descriptionMarkdown) {
-    sections.push("## JIRA Description");
-    sections.push("");
-    sections.push(ctx.descriptionMarkdown);
-    sections.push("");
-  }
-
-  // JIRA comments
-  const comments = ctx.issue.fields.comment?.comments;
-  if (comments && comments.length > 0) {
-    sections.push("## JIRA Comments");
-    sections.push("");
-    for (const comment of comments) {
-      const author = comment.author.displayName;
-      const date = new Date(comment.created).toLocaleDateString();
-      const body = adfToMarkdown(comment.body);
-      sections.push(`**${author}** (${date}):`);
-      sections.push(body);
-      sections.push("");
-    }
-  }
-
-  // User instructions
-  if (ctx.userInstructions.trim()) {
-    sections.push("## Additional Instructions");
-    sections.push("");
-    sections.push(ctx.userInstructions.trim());
-    sections.push("");
-  }
-
-  // Plan-mode instructions
   sections.push("## Your Task — Plan Only");
   sections.push("");
   sections.push(
@@ -156,17 +125,62 @@ export function buildPlanPrompt(
 }
 
 /**
+ * Build a prompt to update an existing plan based on feedback.
+ */
+export function buildPlanUpdatePrompt(
+  ctx: PromptContext & { planFilePath: string; existingPlan: string },
+): string {
+  const sections = buildIssueHeader(ctx);
+
+  sections.push("## Your Task — Update the Existing Plan");
+  sections.push("");
+  sections.push(
+    "An implementation plan was created previously. Update it based on the additional instructions above.",
+  );
+  sections.push("");
+  sections.push("### Current Plan");
+  sections.push("");
+  sections.push(ctx.existingPlan);
+  sections.push("");
+  sections.push("Follow these steps:");
+  sections.push(
+    "1. Review the current plan and the new feedback/instructions",
+  );
+  sections.push(
+    "2. Explore the codebase if needed to address the feedback",
+  );
+  sections.push(
+    "3. Update the plan to incorporate the changes",
+  );
+  sections.push(
+    `4. Write the updated plan to: \`${ctx.planFilePath}\``,
+  );
+  sections.push("");
+
+  return sections.join("\n");
+}
+
+/**
  * Build a feedback prompt for implementing PR review comments.
  */
 export function buildFeedbackPrompt(params: {
-  jiraKey: string;
+  issueKey: string;
   prNumber: number;
   feedbackText: string;
+  newCommentsContext?: string;
 }): string {
   const sections: string[] = [];
 
-  sections.push(`# Feedback for ${params.jiraKey} (PR #${params.prNumber})`);
+  sections.push(`# Feedback for ${params.issueKey} (PR #${params.prNumber})`);
   sections.push("");
+
+  if (params.newCommentsContext) {
+    sections.push("## New Comments Since Last Commit");
+    sections.push("");
+    sections.push(params.newCommentsContext);
+    sections.push("");
+  }
+
   sections.push("## Reviewer Feedback");
   sections.push("");
   sections.push(params.feedbackText);
@@ -174,7 +188,11 @@ export function buildFeedbackPrompt(params: {
   sections.push("## Your Task");
   sections.push("");
   sections.push("Implement the changes requested in the feedback above.");
+  if (params.newCommentsContext) {
+    sections.push("- Address the new reviewer comments listed above");
+  }
   sections.push("- Address each point in the feedback");
+  sections.push("- Before every commit, run `npx prettier --write` on all changed files");
   sections.push("- Make focused commits with clear messages");
   sections.push("- If tests exist, make sure they pass after your changes");
   sections.push("");
