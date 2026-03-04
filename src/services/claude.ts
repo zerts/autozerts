@@ -1,4 +1,6 @@
 import { showToast, Toast } from "@raycast/api";
+import fs from "fs/promises";
+import path from "path";
 import {
   query,
   type SDKResultMessage,
@@ -372,6 +374,11 @@ export async function orchestratePlan(
     await ensurePlanFilesDir();
     const planFilePath = getPlanFilePath(branchName);
 
+    // Claude Code restricts writes to within the current git repository (the
+    // worktree). Use a temp path inside the worktree so Claude can write
+    // freely, then copy it to the persistent planFilePath afterwards.
+    const inWorktreePlanPath = path.join(worktreePath, ".autozerts-plan.md");
+
     let prompt: string;
     if (updateExistingPlan) {
       const existingPlan = await readPlanFile(branchName);
@@ -386,7 +393,7 @@ export async function orchestratePlan(
           userInstructions,
           repoName: repo.name,
           baseBranch,
-          planFilePath,
+          planFilePath: inWorktreePlanPath,
           existingPlan,
           figmaContext,
         });
@@ -401,7 +408,7 @@ export async function orchestratePlan(
           userInstructions,
           repoName: repo.name,
           baseBranch,
-          planFilePath,
+          planFilePath: inWorktreePlanPath,
           figmaContext,
         });
       }
@@ -416,7 +423,7 @@ export async function orchestratePlan(
         userInstructions,
         repoName: repo.name,
         baseBranch,
-        planFilePath,
+        planFilePath: inWorktreePlanPath,
         figmaContext,
       });
     }
@@ -427,6 +434,21 @@ export async function orchestratePlan(
       abortController,
       onProgress: (entry) => appendProgressLog(issueKey, entry),
     });
+
+    // Copy plan from the worktree to the persistent plan files directory,
+    // then remove the temp file so it doesn't get committed later.
+    try {
+      const planContent = await fs.readFile(inWorktreePlanPath, "utf-8");
+      await fs.writeFile(planFilePath, planContent, "utf-8");
+      await fs.unlink(inWorktreePlanPath);
+      await appendProgressLog(issueKey, `Plan saved to ${planFilePath}`);
+    } catch (copyErr) {
+      const msg = copyErr instanceof Error ? copyErr.message : String(copyErr);
+      await appendProgressLog(
+        issueKey,
+        `Warning: Could not copy plan file (${msg}). Check ${inWorktreePlanPath}`,
+      );
+    }
 
     const costUsd = result.costUsd ?? 0;
     await updateTaskStatus(issueKey, "plan_complete", {

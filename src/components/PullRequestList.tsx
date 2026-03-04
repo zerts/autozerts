@@ -848,6 +848,14 @@ function PRListItem({
               }}
             />
           )}
+          {planExists && (
+            <Action.Open
+              title="Open Plan in VS Code"
+              icon={Icon.Code}
+              target={getPlanFilePath(pr.head.ref)}
+              application="Code"
+            />
+          )}
           <Action.OpenInBrowser
             title="Open on GitHub"
             url={pr.html_url}

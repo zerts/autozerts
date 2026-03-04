@@ -3,8 +3,8 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import { getConfig } from "../utils/preferences";
+import { NODE_BIN_PATH } from "../config";
 import type { RepoConfig } from "../types/preferences";
-
 
 const execFileAsync = promisify(execFile);
 
@@ -34,7 +34,8 @@ async function gitAuth(args: string[], cwd: string): Promise<string> {
   const { stdout } = await execFileAsync(
     "git",
     [
-      "-c", `http.https://github.com/.extraheader=Authorization: Basic ${basicAuth}`,
+      "-c",
+      `http.https://github.com/.extraheader=Authorization: Basic ${basicAuth}`,
       ...args,
     ],
     { cwd, maxBuffer: 10 * 1024 * 1024 },
@@ -48,10 +49,7 @@ async function gitAuth(args: string[], cwd: string): Promise<string> {
  */
 async function fetchOrigin(repoName: string, cwd: string): Promise<void> {
   const url = getRepoUrl(repoName);
-  await gitAuth(
-    ["fetch", url, "+refs/heads/*:refs/remotes/origin/*"],
-    cwd,
-  );
+  await gitAuth(["fetch", url, "+refs/heads/*:refs/remotes/origin/*"], cwd);
 }
 
 /**
@@ -233,6 +231,8 @@ export async function installDependencies(worktreePath: string): Promise<void> {
  * Returns true if a commit was created, false if the tree was clean.
  */
 export async function commitAllChanges(worktreePath: string): Promise<boolean> {
+  const nodePath = `${NODE_BIN_PATH}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`;
+
   // Run prettier on changed files before committing
   try {
     const { stdout: diffOutput } = await execFileAsync(
@@ -243,11 +243,12 @@ export async function commitAllChanges(worktreePath: string): Promise<boolean> {
     const changedFiles = diffOutput
       .trim()
       .split("\n")
-      .filter(f => f.length > 0);
+      .filter((f) => f.length > 0);
     if (changedFiles.length > 0) {
       await execFileAsync("npx", ["prettier", "--write", ...changedFiles], {
         cwd: worktreePath,
         maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, PATH: nodePath },
       });
     }
   } catch {
@@ -270,6 +271,7 @@ export async function commitAllChanges(worktreePath: string): Promise<boolean> {
     maxBuffer: 10 * 1024 * 1024,
     env: {
       ...process.env,
+      PATH: nodePath,
       GIT_AUTHOR_NAME: config.gitAuthorName,
       GIT_AUTHOR_EMAIL: config.gitAuthorEmail,
       GIT_COMMITTER_NAME: config.gitAuthorName,

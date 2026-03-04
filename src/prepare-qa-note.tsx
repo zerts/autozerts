@@ -17,11 +17,6 @@ import { GITHUB_OWNER, REPOS } from "./config";
 const RELEASE_TAG_RE = /^(.+)\s+v(\d+(?:\.\d+)*)$/;
 
 function isReleaseLabel(name: string): boolean {
-  console.log(
-    "Checking if label is release tag:",
-    name,
-    RELEASE_TAG_RE.test(name),
-  );
   return RELEASE_TAG_RE.test(name);
 }
 
@@ -104,10 +99,11 @@ function groupByReleaseTags(issues: LinearIssue[]): ReleaseGroup[] {
     }
   }
 
-  // Filter out releases where every task is done or cancelled
-  const DONE_TYPES = new Set(["completed", "cancelled"]);
+  // Hide releases where every task is done (state.type "completed").
+  // Cancelled tasks are intentionally excluded from this check — a release
+  // that has some cancelled and no active tasks should still be surfaced.
   return Array.from(groups.values())
-    .filter((g) => g.issues.some((i) => !DONE_TYPES.has(i.state.type)))
+    .filter((g) => !g.issues.every((i) => i.state.type === "completed"))
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 

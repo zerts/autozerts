@@ -21,6 +21,7 @@ import {
   type TaskState,
   type TaskStatus,
 } from "../types/storage";
+import { getPlanFilePath } from "../services/worktree";
 import { PlanFeedbackForm } from "./PlanFeedbackForm";
 
 interface ExecutionProgressProps {
@@ -147,14 +148,25 @@ function getProgressSteps(task: TaskState): StepInfo[] {
 
 export function ExecutionProgress({ issueKey }: ExecutionProgressProps) {
   const [task, setTask] = useState<TaskState | null>(null);
+  const [planFilePath, setPlanFilePath] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const taskRef = useRef<TaskState | null>(null);
 
   useEffect(() => {
     // Initial fetch
-    getTask(issueKey).then((t) => {
+    getTask(issueKey).then(async (t) => {
       taskRef.current = t;
       setTask(t);
+      if (t) {
+        const fs = await import("fs/promises");
+        const path = getPlanFilePath(t.branchName);
+        try {
+          await fs.access(path);
+          setPlanFilePath(path);
+        } catch {
+          setPlanFilePath(null);
+        }
+      }
     });
 
     // Poll every 1s for responsive updates during Claude execution
@@ -270,7 +282,23 @@ export function ExecutionProgress({ issueKey }: ExecutionProgressProps) {
                 icon={Icon.Pencil}
                 target={<PlanFeedbackForm task={task} />}
               />
+              {planFilePath && (
+                <Action.Open
+                  title="Open Plan in VS Code"
+                  icon={Icon.Code}
+                  target={planFilePath}
+                  application="Code"
+                />
+              )}
             </>
+          )}
+          {planFilePath && task.status !== "plan_complete" && (
+            <Action.Open
+              title="Open Plan in VS Code"
+              icon={Icon.Code}
+              target={planFilePath}
+              application="Code"
+            />
           )}
           {!isTerminal && (
             <Action
