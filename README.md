@@ -141,3 +141,7 @@ Smoke tests against a live T3 Code (cheap, self-cleaning):
 bun run server/scripts/smoke-a.ts   # dispatch + settle + worktree adoption
 bun run server/scripts/smoke-b.ts <threadId>  # /compact turn semantics
 ```
+
+## License
+
+[MIT](./LICENSE)
