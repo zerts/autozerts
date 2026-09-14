@@ -8,7 +8,7 @@ branch, waits for a PR, smoke-tests it in a real browser, reviews it, and sends
 the review back as a fix turn until the PR is approved (max 5 iterations). A
 web dashboard shows every loop, iteration, screenshot and review doc.
 
-[![AI Runner dashboard (video)](https://brief.cleanshot.cloud/media/53980/BTLvqvsQHctv3aej6sy65poSejQc9MfRLc0AibPa.mp4.jpg?width=1200&height=630&scaling=fit&anchor=center&play=1&signature=e960761a4861f1d70aa4ec412311ef03cfd9f12cc4085415c811c8d0ba8a1541)](https://cleanshot.com/share/lnpbxBRh)
+https://github.com/user-attachments/assets/e8ec6847-8296-4bfc-8f98-2c18f00a406c
 
 It also exposes an HTTP API for external triggers, so a launcher such as a
 Raycast command can start loops too (that extension is not part of this repo).
