@@ -7,6 +7,7 @@
     "start": "bun run server/src/index.ts",
     "build:web": "bun run --cwd web build",
     "install-agent": "bun run server/scripts/install-agent.ts",
-    "install-skills": "bun run server/scripts/install-skills.ts"
+    "install-skills": "bun run server/scripts/install-skills.ts",
+    "migrate-data": "bun run server/scripts/migrate-data-layout.ts"
   }
 }

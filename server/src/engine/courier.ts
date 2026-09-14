@@ -5,7 +5,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { config } from "../config";
+import {
+  ARCHIVED_QA_DOC,
+  ARCHIVED_REVIEW_DOC,
+  ARCHIVED_SCREENSHOTS_DIR,
+  iterationDir,
+  toStoredPath,
+} from "../data-paths";
 
 export const REVIEW_DOC_FILENAME = "LOOP-REVIEW.md";
 
@@ -78,15 +84,16 @@ export function parseReviewDoc(content: string): ParsedReviewDoc | null {
  * Archive a review doc per (loop, iteration). Namespaced by loopId because
  * iteration numbers restart at 1 each round — without the loop segment, a
  * follow-up round's review docs would overwrite the prior round's, and the
- * loop feed shows every round's reviews side by side. The returned path is
- * stored on the iteration row and served verbatim by the API.
+ * loop feed shows every round's reviews side by side. Written to
+ * `loops/<ISSUE>/<loopId>/<n>/review.md`; the returned path is relative to
+ * the data dir, stored on the iteration row, and resolved by the API.
  */
 export function archiveReviewDoc(issueIdentifier: string, loopId: string, iteration: number, content: string): string {
-  const dir = path.join(config.dataDir, "reviews", issueIdentifier, loopId);
+  const dir = iterationDir(issueIdentifier, loopId, iteration);
   fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, `${iteration}.md`);
+  const filePath = path.join(dir, ARCHIVED_REVIEW_DOC);
   fs.writeFileSync(filePath, content);
-  return filePath;
+  return toStoredPath(filePath);
 }
 
 export function buildPrComment(iteration: number, maxIterations: number, parsed: ParsedReviewDoc): string {
@@ -225,14 +232,17 @@ export function parseQaDoc(content: string): ParsedQaDoc | null {
 }
 
 export interface ArchivedQa {
+  /** Archived qa.md, relative to the data dir. */
   docPath: string;
-  /** Archived screenshots (copied out of the worktree), absolute paths. */
+  /** Archived screenshots (copied out of the worktree), paths relative to the data dir. */
   images: Array<{ path: string; label?: string }>;
 }
 
 /**
- * Archive QA-RESULT.md and its screenshots per (loop, iteration), copying the
- * PNGs out of the worktree before it's cleared. Missing screenshots are skipped.
+ * Archive QA-RESULT.md (as `qa.md`) and its screenshots into the iteration
+ * dir `loops/<ISSUE>/<loopId>/<n>/` — the same dir the review doc lands in —
+ * copying the PNGs out of the worktree before it's cleared. Missing
+ * screenshots are skipped.
  */
 export function archiveQaArtifacts(
   issueIdentifier: string,
@@ -242,23 +252,24 @@ export function archiveQaArtifacts(
   docContent: string,
   screenshots: QaScreenshot[],
 ): ArchivedQa {
-  const dir = path.join(config.dataDir, "qa", issueIdentifier, loopId, String(iteration));
-  fs.mkdirSync(path.join(dir, "screenshots"), { recursive: true });
-  const docPath = path.join(dir, QA_DOC_FILENAME);
+  const dir = iterationDir(issueIdentifier, loopId, iteration);
+  const shotsDir = path.join(dir, ARCHIVED_SCREENSHOTS_DIR);
+  fs.mkdirSync(shotsDir, { recursive: true });
+  const docPath = path.join(dir, ARCHIVED_QA_DOC);
   fs.writeFileSync(docPath, docContent);
 
   const images: ArchivedQa["images"] = [];
   for (const ss of screenshots) {
     const src = path.join(worktreePath, ss.file);
-    const dest = path.join(dir, "screenshots", path.basename(ss.file));
+    const dest = path.join(shotsDir, path.basename(ss.file));
     try {
       fs.copyFileSync(src, dest);
-      images.push({ path: dest, ...(ss.label ? { label: ss.label } : {}) });
+      images.push({ path: toStoredPath(dest), ...(ss.label ? { label: ss.label } : {}) });
     } catch {
       // screenshot referenced but not on disk — skip, the comment notes it
     }
   }
-  return { docPath, images };
+  return { docPath: toStoredPath(docPath), images };
 }
 
 /** A screenshot ready to embed in the PR comment — `url` set when hosting succeeded. */

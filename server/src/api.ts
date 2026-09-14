@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { taskBranchFromIssue } from "./branch";
 import { config, expandHome, findRepo, repoIconUrl, saveDefaultModel, saveRepos } from "./config";
+import { resolveDataPath } from "./data-paths";
 import {
   dispatchesRepo,
   eventsRepo,
@@ -622,13 +623,9 @@ app.get("/api/loops/:id/review-threads", async (c) => {
 app.get("/api/loops/:id/reviews/:n", (c) => {
   const loop = loopsRepo.get(c.req.param("id"));
   if (!loop) return c.json({ error: "not found" }, 404);
-  const n = Number(c.req.param("n"));
-  // Prefer the path recorded on the iteration row (namespaced per loop); fall
-  // back to the legacy issue-level path for docs archived before namespacing.
-  const stored = iterationsRepo.get(loop.id, n)?.review_doc_path;
-  const legacy = path.join(config.dataDir, "reviews", loop.issue_identifier, `${n}.md`);
-  const docPath = stored && fs.existsSync(stored) ? stored : legacy;
-  if (!fs.existsSync(docPath)) return c.json({ error: "no review doc" }, 404);
+  const stored = iterationsRepo.get(loop.id, Number(c.req.param("n")))?.review_doc_path;
+  const docPath = stored ? resolveDataPath(stored) : null;
+  if (!docPath || !fs.existsSync(docPath)) return c.json({ error: "no review doc" }, 404);
   return c.text(fs.readFileSync(docPath, "utf8"));
 });
 
@@ -636,7 +633,8 @@ app.get("/api/loops/:id/reviews/:n", (c) => {
 app.get("/api/loops/:id/qa/:n", (c) => {
   const loop = loopsRepo.get(c.req.param("id"));
   if (!loop) return c.json({ error: "not found" }, 404);
-  const docPath = iterationsRepo.get(loop.id, Number(c.req.param("n")))?.qa_doc_path;
+  const stored = iterationsRepo.get(loop.id, Number(c.req.param("n")))?.qa_doc_path;
+  const docPath = stored ? resolveDataPath(stored) : null;
   if (!docPath || !fs.existsSync(docPath)) return c.json({ error: "no qa doc" }, 404);
   return c.text(fs.readFileSync(docPath, "utf8"));
 });
@@ -648,8 +646,9 @@ app.get("/api/loops/:id/qa/:n/screenshots/:idx", (c) => {
   const json = iterationsRepo.get(loop.id, Number(c.req.param("n")))?.qa_screenshots_json;
   const images = json ? (JSON.parse(json) as Array<{ path: string }>) : [];
   const image = images[Number(c.req.param("idx"))];
-  if (!image || !fs.existsSync(image.path)) return c.json({ error: "no screenshot" }, 404);
-  return new Response(Bun.file(image.path), {
+  const imagePath = image ? resolveDataPath(image.path) : null;
+  if (!imagePath || !fs.existsSync(imagePath)) return c.json({ error: "no screenshot" }, 404);
+  return new Response(Bun.file(imagePath), {
     headers: { "Cache-Control": "public, max-age=86400" },
   });
 });

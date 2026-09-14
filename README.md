@@ -49,6 +49,20 @@ runtime data dir (default `~/.ai-runner/data`, or whatever `DATA_DIR` says)
 including `qa/` secrets and fixtures, then `bun install`, `bun run install-skills`,
 `bun run build:web`, `bun run install-agent`.
 
+The data dir is self-contained and relocatable (all DB-stored paths are relative
+to it). Layout — see `server/src/data-paths.ts` and ADR-0004:
+
+```
+config.json / runtime.json      editable config; { pid, port } for Raycast port discovery
+db/runner.sqlite, db/backups/   state DB + snapshots
+loops/<ISSUE>/<loopId>/<n>/     one dir per loop iteration: review.md, qa.md, screenshots/
+qa/                             QA infrastructure only (fixtures, personas, secrets) — never per-loop output
+logs/ai-runner.log              daemon log (override with LOG_FILE)
+```
+
+Upgrading from the pre-2026-09 layout (`reviews/`, `qa/<ISSUE>/`, root-level
+sqlite): stop the daemon, run `bun run migrate-data`, then `bun run install-agent`.
+
 ## How a Loop runs
 
 1. **Select** a task (web UI `/tasks`, Raycast, or `POST /api/tasks/:ref/select`).

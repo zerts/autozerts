@@ -51,8 +51,8 @@ It exposes an HTTP API (consumed by the Raycast extension, which becomes a thin 
 
 - **Repo layout:** Bun workspaces — `server/` (Hono API + loop engine, TS run directly by Bun) and `web/` (Vite + React + Tailwind + shadcn/ui, built into static assets served by the server).
 - **Process model:** launchd agent (`~/Library/LaunchAgents/com.autozerts.ai-runner.plist`, `KeepAlive`), installed via `bun run install-agent`. `bun run dev` for foreground development.
-- **Data dir:** `~/.ai-runner/data/` — `runner.sqlite`, `runtime.json` (`{ port }`, for Raycast port discovery), `reviews/<TASK-ID>/<iteration>.md` archive.
-- **Logs:** `~/.ai-runner/logs/ai-runner.log`.
+- **Data dir:** `DATA_DIR` (default `~/.ai-runner/data/`) — `db/runner.sqlite`, `runtime.json` (`{ pid, port }`, for Raycast port discovery), `loops/<TASK-ID>/<loopId>/<n>/` archive (`review.md`, `qa.md`, `screenshots/`), `qa/` infrastructure (fixtures, personas, secrets). Layout in `server/src/data-paths.ts`, ADR-0004.
+- **Logs:** `DATA_DIR/logs/ai-runner.log` (override with `LOG_FILE`).
 
 ### 4.1 T3 Code integration (ported from `raycast-extension/src/services/t3code.ts`)
 
@@ -102,7 +102,7 @@ States: `queued → running (implementing | reviewing | fixing | compacting) →
 1. **First iteration only:** create the Review Thread — bootstrap `prepareWorktree { baseBranch: <task-branch>, branch: qa/<task-branch>-<base36-ts> }` (**Review Branch**, `generateQaBranchName` convention), `runSetupScript: true`. First message: `/loop-review <issue-url> <pr-url>`.
 2. **Subsequent iterations:** post a **Compact Turn** (`/compact`) on the Review Thread, wait for completion, then post: `/loop-review <issue-url> <pr-url>` (the skill itself hard-resets to `origin/<task-branch>` and re-reviews with fresh eyes).
 3. On review turn completion: read the **Review Doc** from `<review-worktree>/LOOP-REVIEW.md` (worktree path from `projection_threads.worktree_path`).
-4. Courier (ADR-0001): archive to `autozerts-data/reviews/<TASK-ID>/<n>.md`; post as PR comment (`gh pr comment`, prefixed `## 🔄 Loop review — iteration <n>/5`); parse the **Verdict**.
+4. Courier (ADR-0001): archive to `DATA_DIR/loops/<TASK-ID>/<loopId>/<n>/review.md`; post as PR comment (`gh pr comment`, prefixed `## 🔄 Loop review — iteration <n>/5`); parse the **Verdict**.
    - `approved` → Loop `approved` (green; notification; done — PR awaits human review/merge).
    - `needs-changes` → §5.4.
    - Missing/unparseable doc → treat as `needs-changes` whose "review doc" is an instruction to re-run the review properly; this consumes the fix turn as a re-review request, not an iteration increment, max once per iteration before `error`.
@@ -212,7 +212,7 @@ LINEAR_API_KEY=lin_api_...
 REPOS=[{"name":"pulse-frontend","localPath":"/path/to/pulse-frontend","defaultBranch":"main"}, ...]
 CLAUDE_MODEL=claude-fable-5
 DATA_DIR=~/.ai-runner/data
-LOG_FILE=~/.ai-runner/logs/ai-runner.log
+# LOG_FILE defaults to DATA_DIR/logs/ai-runner.log
 MAX_PARALLEL_LOOPS=10
 MAX_ITERATIONS=5
 ```

@@ -1,16 +1,15 @@
 /**
- * Runner persistence (runner.sqlite in DATA_DIR). The dispatch journal is the
+ * Runner persistence (DATA_DIR/db/runner.sqlite, see data-paths.ts). The dispatch journal is the
  * crash-recovery backbone: every intended turn is recorded BEFORE sending and
  * confirmed against T3's message log afterwards, so a restart never blindly
  * re-dispatches.
  */
-import path from "node:path";
 import fs from "node:fs";
 import { Database } from "bun:sqlite";
-import { config } from "./config";
+import { DB_DIR, DB_PATH } from "./data-paths";
 
-fs.mkdirSync(config.dataDir, { recursive: true });
-export const db = new Database(path.join(config.dataDir, "runner.sqlite"));
+fs.mkdirSync(DB_DIR, { recursive: true });
+export const db = new Database(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA foreign_keys = ON");
 
@@ -80,10 +79,10 @@ CREATE TABLE IF NOT EXISTS iterations (
   n INTEGER NOT NULL,
   verdict TEXT,                     -- approved|needs-changes
   findings_json TEXT,
-  review_doc_path TEXT,
+  review_doc_path TEXT,             -- archived LOOP-REVIEW.md, relative to DATA_DIR
   qa_verdict TEXT,                  -- pass|fail (QA smoke gate, when the repo opts in)
-  qa_doc_path TEXT,                 -- archived QA-RESULT.md
-  qa_screenshots_json TEXT,         -- [{ path, label? }] of archived screenshots
+  qa_doc_path TEXT,                 -- archived QA-RESULT.md, relative to DATA_DIR
+  qa_screenshots_json TEXT,         -- [{ path, label? }] of archived screenshots (paths relative to DATA_DIR)
   qa_reviewed_at TEXT,
   remote_sha_before TEXT,
   remote_sha_after TEXT,

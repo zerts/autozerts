@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { app } from "./api";
 import { config } from "./config";
+import { RUNTIME_JSON_PATH } from "./data-paths";
 import { startEngine } from "./engine/engine";
 import { log } from "./log";
 
@@ -22,7 +23,7 @@ app.get("*", async (c) => {
 // Written on boot so external clients (Raycast) can discover the live port,
 // mirroring how T3 Code publishes server-runtime.json.
 fs.writeFileSync(
-  path.join(config.dataDir, "runtime.json"),
+  RUNTIME_JSON_PATH,
   JSON.stringify({ version: 1, pid: process.pid, port: config.port, startedAt: new Date().toISOString() }),
 );
 

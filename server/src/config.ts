@@ -190,7 +190,7 @@ export const config = {
   repos: loadRepos(),
   claudeModel: loadDefaultModel(),
   dataDir,
-  logFile: expandHome(env.LOG_FILE ?? "~/.ai-runner/logs/ai-runner.log"),
+  logFile: env.LOG_FILE ? expandHome(env.LOG_FILE) : path.join(dataDir, "logs", "ai-runner.log"),
   maxParallelLoops: int(env.MAX_PARALLEL_LOOPS, 10),
   maxIterations: int(env.MAX_ITERATIONS, 5),
 };

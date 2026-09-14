@@ -18,6 +18,7 @@
  */
 import { generateQaBranchName } from "../branch";
 import { config, findRepo } from "../config";
+import { resolveDataPath } from "../data-paths";
 import {
   dispatchesRepo,
   eventsRepo,
@@ -77,6 +78,11 @@ import {
   qaMessage,
   reviewMessage,
 } from "./prompts";
+
+/** Archived image records carry data-dir-relative paths; git plumbing needs absolute ones. */
+function absoluteImages<T extends { path: string }>(images: T[]): T[] {
+  return images.map((i) => ({ ...i, path: resolveDataPath(i.path) }));
+}
 
 const TICK_MS = 3_000;
 const GATE_CHECK_MS = 30_000;
@@ -472,7 +478,7 @@ async function handleQaSettled(loop: LoopRow): Promise<void> {
       ...(i.label ? { label: i.label } : {}),
     }));
     try {
-      const uploaded = await uploadQaScreenshots(repo.localPath, `${loop.issue_identifier}/${loop.id}/${loop.iteration}`, archived.images);
+      const uploaded = await uploadQaScreenshots(repo.localPath, `${loop.issue_identifier}/${loop.id}/${loop.iteration}`, absoluteImages(archived.images));
       if (uploaded.length > 0) {
         imageRefs = uploaded.map((u) => ({ name: u.name, ...(u.label ? { label: u.label } : {}), ...(u.url ? { url: u.url } : {}) }));
       }
@@ -619,7 +625,7 @@ async function handleQaProbeSettled(loop: LoopRow): Promise<void> {
         ...(i.label ? { label: i.label } : {}),
       }));
       try {
-        const uploaded = await uploadQaScreenshots(repo.localPath, `${loop.issue_identifier}/${loop.id}/probe-${loop.iteration}`, archived.images);
+        const uploaded = await uploadQaScreenshots(repo.localPath, `${loop.issue_identifier}/${loop.id}/probe-${loop.iteration}`, absoluteImages(archived.images));
         if (uploaded.length > 0) {
           imageRefs = uploaded.map((u) => ({ name: u.name, ...(u.label ? { label: u.label } : {}), ...(u.url ? { url: u.url } : {}) }));
         }
@@ -826,11 +832,11 @@ async function decisionPoint(loop: LoopRow): Promise<void> {
       } else {
         const iteration = iterationsRepo.get(loop.id, loop.iteration);
         if (iteration?.review_doc_path) {
-          const doc = await Bun.file(iteration.review_doc_path).text().catch(() => null);
+          const doc = await Bun.file(resolveDataPath(iteration.review_doc_path)).text().catch(() => null);
           await dispatchTurn(loop, thread, "fix", fixMessage(loop, doc ?? "(review doc unavailable — re-read the latest loop review comment on the PR)"));
         } else if (iteration?.qa_verdict === "fail" && iteration.qa_doc_path) {
           // This iteration is fixing a QA-gate failure (review hasn't run yet).
-          const doc = await Bun.file(iteration.qa_doc_path).text().catch(() => null);
+          const doc = await Bun.file(resolveDataPath(iteration.qa_doc_path)).text().catch(() => null);
           await dispatchTurn(loop, thread, "fix", qaFixMessage(loop, doc ?? "(QA result unavailable — re-read the latest QA comment on the PR)", qaPortFor(loop)));
         } else {
           await dispatchTurn(loop, thread, "fix", fixMessage(loop, "(review doc unavailable — re-read the latest loop review comment on the PR)"));

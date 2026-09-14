@@ -26,6 +26,11 @@ task. Output: a GitHub PR, iterated until a Playwright-backed review approves it
   QA profiles (`qa-profiles/<repo>.md`, read by `/loop-qa`) and internal docs.
   Skills resolve it relative to this checkout, so keep the two side by side.
 - `docs/` — `prd/`, `adr/`.
+- `../autozerts-data/` — **runtime data dir** (`DATA_DIR`, not in git). Layout is
+  defined once in `server/src/data-paths.ts`: `db/runner.sqlite`,
+  `loops/<ISSUE>/<loopId>/<n>/{review.md,qa.md,screenshots/}`, `qa/` (fixtures,
+  personas, secrets — infrastructure only), `logs/ai-runner.log`. DB-stored paths
+  are relative to the data dir; resolve them with `resolveDataPath`. See ADR-0004.
 
 ## Commands
 
