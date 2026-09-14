@@ -20,13 +20,17 @@ task. Output: a GitHub PR, iterated until a Playwright-backed review approves it
 - `web/` — Vite + React + Tailwind v4 + shadcn/ui dashboard. Built to `web/dist`.
 - `skills/` — the Claude Code skills the Runner dispatches by name
   (`/linear-implement`, `/loop-qa`, `/loop-review`, `/address-review`) plus
-  `/qa-playwright`, which `/address-review` builds on. Symlinked into
+  `/qa-playwright`, which `/address-review` builds on, and `/runner-setup`, the
+  guided onboarding that drives `bun run doctor`. Symlinked into
   `~/.claude/skills` by `bun run install-skills`; edit them here.
+- `templates/private-repo/` — starter for a user's `../autozerts-private`
+  (README + `qa-profiles/_example.md`). Keep `_example.md` in sync with what
+  `/loop-qa` §2–§4 expects from a profile.
 - `../autozerts-private/` — **sibling private repo** (not in this tree): per-repo
   QA profiles (`qa-profiles/<repo>.md`, read by `/loop-qa`) and internal docs.
   Skills resolve it relative to this checkout, so keep the two side by side.
 - `docs/` — `prd/`, `adr/`.
-- `../autozerts-data/` — **runtime data dir** (`DATA_DIR`, not in git). Layout is
+- **runtime data dir** (`DATA_DIR`, default `~/.ai-runner/data`; not in git). Layout is
   defined once in `server/src/data-paths.ts`: `db/runner.sqlite`,
   `loops/<ISSUE>/<loopId>/<n>/{review.md,qa.md,screenshots/}`, `qa/` (fixtures,
   personas, secrets — infrastructure only), `logs/ai-runner.log`. DB-stored paths
@@ -46,6 +50,7 @@ cd server && bunx tsc --noEmit
 Background service (launchd, starts at login, restarts on crash):
 
 ```bash
+bun run doctor                     # environment checklist (--json for the setup skill)
 bun run install-skills             # link skills/ into ~/.claude/skills
 bun run install-agent              # install + start
 bun run install-agent --uninstall  # remove

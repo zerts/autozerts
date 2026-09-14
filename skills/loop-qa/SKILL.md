@@ -75,7 +75,8 @@ Read `$PRIVATE/qa-profiles/<repo>.md`. It
 tells you: the exact serve command + **port** + env it needs, how to get past auth and
 seed a known state, how to force gated UI on, and the project's console/network gotchas.
 If no profile exists for this repo, that's a `blocker` — write `QA-RESULT.md` with
-`qa: fail` explaining a profile is missing, and stop.
+`qa: fail` explaining a profile is missing (point the human at
+`templates/private-repo/qa-profiles/_example.md` and `/runner-setup`), and stop.
 
 ## 3. Serve the app (per profile)
 

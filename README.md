@@ -1,36 +1,66 @@
 # AI Runner
 
-A local background server that owns all communication with T3 Code: it starts
-and supervises implement→review **Loops** on Linear tasks, exposes an HTTP API
-for external triggers (Raycast), and serves a web dashboard.
+Pick a Linear task. Get back a reviewed GitHub pull request.
 
-Data source: a Linear task. Outcome: a GitHub pull request, iterated until a
-Playwright-backed review approves it (max 5 iterations).
+AI Runner is a local daemon that drives [T3 Code](https://t3.chat/code) through
+implement→QA→review **Loops**: it opens a Claude Code thread on the task's
+branch, waits for a PR, smoke-tests it in a real browser, reviews it, and sends
+the review back as a fix turn until the PR is approved (max 5 iterations). A
+web dashboard shows every loop, iteration, screenshot and review doc.
+
+[![AI Runner dashboard (video)](https://brief.cleanshot.cloud/media/53980/BTLvqvsQHctv3aej6sy65poSejQc9MfRLc0AibPa.mp4.jpg?width=1200&height=630&scaling=fit&anchor=center&play=1&signature=e960761a4861f1d70aa4ec412311ef03cfd9f12cc4085415c811c8d0ba8a1541)](https://cleanshot.com/share/lnpbxBRh)
+
+It also exposes an HTTP API for external triggers, so a launcher such as a
+Raycast command can start loops too (that extension is not part of this repo).
 
 Docs: [`CONTEXT.md`](./CONTEXT.md) (domain glossary) ·
 [`docs/prd/ai-runner.md`](./docs/prd/ai-runner.md) (full spec) ·
 [`docs/adr/`](./docs/adr/) (decisions)
 
-## Repository layout
+## Requirements
 
-Two sibling checkouts are assumed, under the same parent directory:
+- macOS (the background service uses launchd; other platforms can run
+  `bun run start` by hand)
+- [Bun](https://bun.sh)
+- [T3 Code](https://t3.chat/code), installed and signed in. The runner talks to
+  T3 through its local, undocumented interfaces (a signing key under
+  `~/.t3/userdata` and the orchestration websocket). It is an unofficial
+  integration and may break on T3 updates.
+- [Claude Code](https://claude.com/claude-code) with the **Linear MCP** server
+  connected (the skills read and comment on issues through it)
+- GitHub CLI `gh`, authenticated
+- A Linear workspace and a personal API key
+- Node/npm on the PATH (skills bootstrap Playwright with it on first QA run)
 
-```
-<parent>/autozerts/           this repo (public): runner, dashboard, skills
-<parent>/autozerts-private/   private repo: qa-profiles/<repo>.md, internal docs
-```
-
-Skills locate the private repo relative to this checkout (`../autozerts-private`),
-so clone both side by side. `/loop-qa` refuses to run for a repo with no profile.
+Linear is the only task tracker supported today.
 
 ## Setup
 
+The fastest path is to let Claude Code walk you through it. Clone, install,
+link the skills, then run the setup skill from the repo root in Claude Code or
+T3 Code:
+
 ```bash
-cp .env.example .env   # fill LINEAR_API_KEY, REPOS (same shape as the Raycast extension)
-bun install
-bun run install-skills # symlink skills/* into ~/.claude/skills (runner dispatches them by name)
+git clone https://github.com/zerts/autozerts.git && cd autozerts
+bun install && bun run install-skills
+```
+
+```
+/runner-setup
+```
+
+It runs `bun run doctor`, fixes what it can, asks only for what it cannot
+detect (your repos, how each one is served and authenticated for QA), tells
+you which file to paste each key into (never the chat), and ends with the
+dashboard open. It is safe to re-run.
+
+Manual equivalent:
+
+```bash
+cp .env.example .env    # fill LINEAR_API_KEY and REPOS
+bun run doctor          # checklist of everything below; exit 1 while anything fails
 bun run build:web
-bun run start          # http://127.0.0.1:4777
+bun run start           # http://127.0.0.1:4777
 ```
 
 Background service (starts at login, restarts on crash):
@@ -40,20 +70,38 @@ bun run install-agent              # install + start
 bun run install-agent --uninstall  # remove
 ```
 
-Requirements: Bun, an authenticated `gh` CLI, T3 Code signed in, and the
-skills from `skills/` installed (`bun run install-skills`): `/linear-implement`,
-`/loop-qa`, `/loop-review`, `/address-review`, `/qa-playwright`.
+## Repository layout
 
-New machine checklist: clone both repos side by side, copy `.env`, copy the
-runtime data dir (default `~/.ai-runner/data`, or whatever `DATA_DIR` says)
-including `qa/` secrets and fixtures, then `bun install`, `bun run install-skills`,
-`bun run build:web`, `bun run install-agent`.
+Two sibling checkouts, under the same parent directory:
+
+```
+<parent>/autozerts/           this repo (public): runner, dashboard, skills
+<parent>/autozerts-private/   yours (private): qa-profiles/<repo>.md, internal docs
+```
+
+Skills resolve the private repo as `../autozerts-private`. It holds the
+per-repo **QA profile** `/loop-qa` follows to serve, authenticate and drive
+each project; a repo with `qaGate` on and no profile fails the gate. Create it
+from the template (`/runner-setup` does this for you):
+
+```bash
+cp -R templates/private-repo ../autozerts-private
+# then fill ../autozerts-private/qa-profiles/<repo>.md from _example.md
+```
+
+Secret *values* (test-account credentials, Playwright storageState fixtures)
+never go in either repo; they live under `DATA_DIR/qa/` and profiles point at
+them.
+
+Moving to a new machine: clone both repos side by side, copy `.env` and the
+data dir, then `bun install`, `bun run install-skills`, `bun run build:web`,
+`bun run install-agent`, and `bun run doctor`.
 
 The data dir is self-contained and relocatable (all DB-stored paths are relative
 to it). Layout — see `server/src/data-paths.ts` and ADR-0004:
 
 ```
-config.json / runtime.json      editable config; { pid, port } for Raycast port discovery
+config.json / runtime.json      editable config; { pid, port } for external launchers
 db/runner.sqlite, db/backups/   state DB + snapshots
 loops/<ISSUE>/<loopId>/<n>/     one dir per loop iteration: review.md, qa.md, screenshots/
 qa/                             QA infrastructure only (fixtures, personas, secrets) — never per-loop output
@@ -65,7 +113,7 @@ sqlite): stop the daemon, run `bun run migrate-data`, then `bun run install-agen
 
 ## How a Loop runs
 
-1. **Select** a task (web UI `/tasks`, Raycast, or `POST /api/tasks/:ref/select`).
+1. **Select** a task (web UI `/tasks`, or `POST /api/tasks/:ref/select`).
 2. The Runner bootstraps a T3 thread on the issue's `branchName` and posts
    `/linear-implement <issue-url>`.
 3. **PR Gate** — the loop advances when an open PR exists for the branch.

@@ -8,6 +8,7 @@
     "build:web": "bun run --cwd web build",
     "install-agent": "bun run server/scripts/install-agent.ts",
     "install-skills": "bun run server/scripts/install-skills.ts",
+    "doctor": "bun run server/scripts/doctor.ts",
     "migrate-data": "bun run server/scripts/migrate-data-layout.ts"
   }
 }
