@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/server/scripts/rebuild-hook.sh\"",
+            "timeout": 120,
+            "statusMessage": "Rebuilding ai-runner (web/server)…"
+          }
+        ]
+      }
+    ]
+  }
+}

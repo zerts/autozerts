@@ -1,0 +1,502 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Theming model
+ * -------------
+ * Two layers of design tokens, both consumed only through semantic utilities
+ * (bg-background, text-foreground, bg-info-soft, …) — never raw color values in
+ * components:
+ *
+ *  1. Chrome tokens (background, primary, accent, border, radius…). These define
+ *     a palette's personality and are overridden per palette via
+ *     `[data-theme="…"]`. Light lives on `:not(.dark)`, dark on `.dark`.
+ *  2. Status tokens (info / success / warning / danger / special, each with a
+ *     `-soft` background companion). These carry semantic meaning (running,
+ *     approved, blocked, error, paused) so they stay constant across palettes —
+ *     only light vs dark swaps them, via `:root` / `.dark`.
+ *
+ * The active palette is selected by `data-theme` on <html>; light/dark by the
+ * `.dark` class. Both are set by the boot script in index.html before paint and
+ * kept in sync by lib/theme.ts + lib/palette.ts. Adding or tweaking a palette is
+ * pure CSS — no component or build change.
+ */
+
+/* ── Base palette: "Slate" (neutral) — also the no-data-theme fallback ─────── */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+
+  /* Status tokens — semantic, shared by every palette (light) */
+  --info: oklch(0.54 0.18 255);
+  --info-soft: oklch(0.95 0.04 255);
+  --success: oklch(0.55 0.13 155);
+  --success-soft: oklch(0.95 0.05 158);
+  --warning: oklch(0.58 0.13 70);
+  --warning-soft: oklch(0.95 0.06 85);
+  --danger: oklch(0.58 0.22 25);
+  --danger-soft: oklch(0.95 0.04 25);
+  --special: oklch(0.55 0.2 295);
+  --special-soft: oklch(0.95 0.04 300);
+
+  /*
+   * Non-color personality tokens — also part of a palette. `--elevation` reads
+   * `--shadow-color` lazily, so a palette retints every shadow by setting that
+   * one var. `--app-gradient` is a shared formula that glows with the palette's
+   * own `--primary`, tuned per palette via `--glow`.
+   *
+   * Surfaces are borderless: cards, popovers and rows carry no outline at all —
+   * `--elevation` shadows and background contrast do the separating. Hairlines
+   * survive in exactly three roles: one-sided dividers (border-b/t/l, colored by
+   * `--border`), dashed semantic outlines (empty states, unstable links), and
+   * form controls (`inset-ring inset-ring-input`, composing with the outer
+   * focus halo).
+   */
+  --shadow-color: oklch(0.2 0.02 260 / 0.07);
+  --elevation: 0 1px 2px 0 var(--shadow-color), 0 8px 24px -12px var(--shadow-color);
+  --glow: 5%;
+  --app-gradient: radial-gradient(
+    135% 110% at 50% -8%,
+    var(--background) 42%,
+    color-mix(in oklab, var(--primary) var(--glow), var(--background)) 100%
+  );
+}
+
+.dark {
+  /* Widen the page↔surface gap (was 0.145 vs 0.205, a faint 0.06 step): drop the
+     page darker and lift cards/popovers so elevated surfaces read clearly. */
+  --background: oklch(0.12 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.225 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.225 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+
+  /* Status tokens (dark): strong text reads on a dim soft surface */
+  --info: oklch(0.78 0.12 255);
+  --info-soft: oklch(0.3 0.07 255);
+  --success: oklch(0.78 0.12 158);
+  --success-soft: oklch(0.3 0.06 158);
+  --warning: oklch(0.83 0.11 85);
+  --warning-soft: oklch(0.32 0.06 70);
+  --danger: oklch(0.78 0.13 25);
+  --danger-soft: oklch(0.32 0.09 25);
+  --special: oklch(0.79 0.13 295);
+  --special-soft: oklch(0.32 0.08 295);
+
+  --shadow-color: oklch(0 0 0 / 0.4);
+  --glow: 9%;
+}
+
+/* ── Slate (base palette) — flat off-white ─────────────────────────────────────
+   Slate is the default, so it has no [data-theme] attr; `:not([data-theme])`
+   scopes this to slate alone and leaves ocean/sunset/grape (which share the base
+   `--app-gradient`) untouched. A flat #F3F3F3 page — no gradient, no pattern. */
+html:not([data-theme]):not(.dark) {
+  --background: #f3f3f3;
+  --app-gradient: #f3f3f3;
+}
+html:not([data-theme]).dark {
+  /* Luminous dots so they read against the near-black base. */
+  --app-gradient:
+    radial-gradient(
+      oklch(0.985 0 0 / 0.06) 1.4px,
+      transparent 1.5px
+    ) 0 0 / 20px 20px,
+    radial-gradient(
+      135% 110% at 50% -8%,
+      var(--background) 42%,
+      color-mix(in oklab, var(--primary) var(--glow), var(--background)) 100%
+    );
+}
+
+/* ── Vercel — pure-neutral grayscale, white cards, thin sharp borders ──────────
+   A deliberately monochrome palette modelled on the classic Vercel dashboard:
+   an off-white page, crisp white cards, hairline 1px borders, a tight radius and
+   only a whisper of shadow. The backdrop is a near-flat neutral with the faintest
+   top vignette for depth — no colored glow, so the chrome stays out of the way. */
+[data-theme="vercel"]:not(.dark) {
+  --radius: 0.375rem;
+  --background: oklch(0.975 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.965 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.96 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  /* Translucent hairlines for what remains of them (dividers, form-control
+     rings): 10%-black reads as the same grey on white but blends into the grid
+     backdrop instead of going chalky over it. */
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 10%);
+  --ring: oklch(0.708 0 0);
+  --shadow-color: oklch(0 0 0 / 0.05);
+  --glow: 0%;
+  /* A light-grey page over a very faint blue diagonal wash (transparent
+     top-left → ~0.1 alpha blue bottom-right) so the grey shows through. The grey
+     base is a touch lighter than the old off-white (0.975 → 0.985). */
+  --background: oklch(0.985 0 0);
+  --app-gradient: linear-gradient(
+    to bottom right,
+    transparent 0%,
+    oklch(0.6 0.19 255 / 0.1) 100%
+  );
+}
+[data-theme="vercel"].dark {
+  --radius: 0.375rem;
+  --background: oklch(0.13 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.17 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.17 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.22 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.22 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.24 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.556 0 0);
+  --shadow-color: oklch(0 0 0 / 0.5);
+  --glow: 0%;
+  --app-gradient: radial-gradient(
+    120% 80% at 50% -12%,
+    color-mix(in oklab, var(--foreground) 5%, var(--background)),
+    var(--background) 50%
+  );
+}
+
+/* ── Ocean — teal/cyan primary, cool slate-blue neutrals ───────────────────── */
+[data-theme="ocean"]:not(.dark) {
+  --radius: 0.75rem;
+  --background: oklch(0.99 0.006 225);
+  --foreground: oklch(0.21 0.024 240);
+  --card: oklch(1 0.004 225);
+  --card-foreground: oklch(0.21 0.024 240);
+  --popover: oklch(1 0.004 225);
+  --popover-foreground: oklch(0.21 0.024 240);
+  --primary: oklch(0.56 0.12 215);
+  --primary-foreground: oklch(0.99 0.01 225);
+  --secondary: oklch(0.955 0.018 225);
+  --secondary-foreground: oklch(0.27 0.03 235);
+  --muted: oklch(0.96 0.014 225);
+  --muted-foreground: oklch(0.52 0.03 235);
+  --accent: oklch(0.93 0.035 210);
+  --accent-foreground: oklch(0.27 0.04 230);
+  --border: oklch(0.9 0.018 225);
+  --input: oklch(0.9 0.018 225);
+  --ring: oklch(0.56 0.12 215);
+  --shadow-color: oklch(0.5 0.1 220 / 0.16);
+  --glow: 15%;
+}
+[data-theme="ocean"].dark {
+  --radius: 0.75rem;
+  --background: oklch(0.17 0.02 235);
+  --foreground: oklch(0.96 0.01 225);
+  --card: oklch(0.215 0.024 235);
+  --card-foreground: oklch(0.96 0.01 225);
+  --popover: oklch(0.215 0.024 235);
+  --popover-foreground: oklch(0.96 0.01 225);
+  --primary: oklch(0.72 0.12 205);
+  --primary-foreground: oklch(0.18 0.03 235);
+  --secondary: oklch(0.27 0.03 235);
+  --secondary-foreground: oklch(0.96 0.01 225);
+  --muted: oklch(0.27 0.03 235);
+  --muted-foreground: oklch(0.72 0.03 220);
+  --accent: oklch(0.31 0.045 215);
+  --accent-foreground: oklch(0.96 0.01 225);
+  --border: oklch(0.85 0.05 225 / 12%);
+  --input: oklch(0.85 0.05 225 / 16%);
+  --ring: oklch(0.6 0.09 210);
+  --shadow-color: oklch(0 0 0 / 0.45);
+  --glow: 16%;
+}
+
+/* ── Sunset — warm amber/orange primary, warm stone neutrals ───────────────── */
+[data-theme="sunset"]:not(.dark) {
+  --radius: 0.5rem;
+  --background: oklch(0.99 0.008 75);
+  --foreground: oklch(0.22 0.02 50);
+  --card: oklch(1 0.005 75);
+  --card-foreground: oklch(0.22 0.02 50);
+  --popover: oklch(1 0.005 75);
+  --popover-foreground: oklch(0.22 0.02 50);
+  --primary: oklch(0.64 0.15 52);
+  --primary-foreground: oklch(0.99 0.01 75);
+  --secondary: oklch(0.955 0.02 75);
+  --secondary-foreground: oklch(0.28 0.03 50);
+  --muted: oklch(0.96 0.016 75);
+  --muted-foreground: oklch(0.53 0.035 55);
+  --accent: oklch(0.93 0.04 65);
+  --accent-foreground: oklch(0.28 0.04 50);
+  --border: oklch(0.88 0.025 65);
+  --input: oklch(0.88 0.025 65);
+  --ring: oklch(0.64 0.15 52);
+  --shadow-color: oklch(0.5 0.12 55 / 0.16);
+  --glow: 16%;
+}
+[data-theme="sunset"].dark {
+  --radius: 0.5rem;
+  --background: oklch(0.18 0.014 50);
+  --foreground: oklch(0.96 0.012 75);
+  --card: oklch(0.225 0.018 50);
+  --card-foreground: oklch(0.96 0.012 75);
+  --popover: oklch(0.225 0.018 50);
+  --popover-foreground: oklch(0.96 0.012 75);
+  --primary: oklch(0.75 0.14 58);
+  --primary-foreground: oklch(0.2 0.03 50);
+  --secondary: oklch(0.28 0.025 50);
+  --secondary-foreground: oklch(0.96 0.012 75);
+  --muted: oklch(0.28 0.025 50);
+  --muted-foreground: oklch(0.73 0.03 65);
+  --accent: oklch(0.32 0.04 55);
+  --accent-foreground: oklch(0.96 0.012 75);
+  --border: oklch(0.85 0.05 70 / 16%);
+  --input: oklch(0.85 0.05 70 / 18%);
+  --ring: oklch(0.66 0.1 55);
+  --shadow-color: oklch(0 0 0 / 0.45);
+  --glow: 17%;
+}
+
+/* ── Forest — green primary, sage warm-gray neutrals ───────────────────────── */
+[data-theme="forest"]:not(.dark) {
+  --radius: 0.375rem;
+  /* Base page is near-white so the diagonal gradient has somewhere white to
+     fade to in the top-left; the green lives entirely in the gradient. */
+  --background: oklch(0.985 0.004 150);
+  --foreground: oklch(0.21 0.02 160);
+  --card: oklch(1 0.001 150);
+  --card-foreground: oklch(0.21 0.02 160);
+  --popover: oklch(1 0.001 150);
+  --popover-foreground: oklch(0.21 0.02 160);
+  --primary: oklch(0.52 0.11 155);
+  --primary-foreground: oklch(0.99 0.01 150);
+  --secondary: oklch(0.945 0.012 150);
+  --secondary-foreground: oklch(0.27 0.03 160);
+  --muted: oklch(0.95 0.01 150);
+  --muted-foreground: oklch(0.5 0.025 158);
+  --accent: oklch(0.93 0.025 150);
+  --accent-foreground: oklch(0.27 0.04 158);
+  --border: oklch(0.89 0.015 150);
+  --input: oklch(0.89 0.015 150);
+  --ring: oklch(0.52 0.11 155);
+  --shadow-color: oklch(0.45 0.1 155 / 0.12);
+  /* A restrained top-center glow (the shared palette formula via `--glow`),
+     not a full-page green sweep — so the green stays an accent and cards keep
+     their contrast all the way down the page. A fine grid of faint green dots
+     sits on top for a tactile feel; the dot layer comes first so it's above
+     the glow. */
+  --glow: 7%;
+  --app-gradient:
+    radial-gradient(
+      oklch(0.52 0.11 155 / 0.06) 1.3px,
+      transparent 1.4px
+    ) 0 0 / 22px 22px,
+    radial-gradient(
+      135% 110% at 50% -8%,
+      var(--background) 50%,
+      color-mix(in oklab, var(--primary) var(--glow), var(--background)) 100%
+    );
+}
+[data-theme="forest"].dark {
+  --radius: 0.375rem;
+  --background: oklch(0.17 0.016 160);
+  --foreground: oklch(0.96 0.01 150);
+  --card: oklch(0.215 0.02 160);
+  --card-foreground: oklch(0.96 0.01 150);
+  --popover: oklch(0.215 0.02 160);
+  --popover-foreground: oklch(0.96 0.01 150);
+  --primary: oklch(0.68 0.12 155);
+  --primary-foreground: oklch(0.18 0.03 160);
+  --secondary: oklch(0.27 0.018 160);
+  --secondary-foreground: oklch(0.96 0.01 150);
+  --muted: oklch(0.27 0.018 160);
+  --muted-foreground: oklch(0.72 0.025 155);
+  --accent: oklch(0.31 0.03 152);
+  --accent-foreground: oklch(0.96 0.01 150);
+  --border: oklch(0.85 0.04 150 / 12%);
+  --input: oklch(0.85 0.04 150 / 16%);
+  --ring: oklch(0.6 0.09 155);
+  --shadow-color: oklch(0 0 0 / 0.45);
+  /* A restrained top-center glow (shared formula via `--glow`) instead of a
+     full-page sweep, so the dim base stays calm and cards keep contrast. Dots
+     use a luminous green so they read against the dark base. */
+  --glow: 10%;
+  --app-gradient:
+    radial-gradient(
+      oklch(0.68 0.12 155 / 0.08) 1.3px,
+      transparent 1.4px
+    ) 0 0 / 22px 22px,
+    radial-gradient(
+      135% 110% at 50% -8%,
+      var(--background) 50%,
+      color-mix(in oklab, var(--primary) var(--glow), var(--background)) 100%
+    );
+}
+
+/* ── Grape — violet primary, cool lavender-gray neutrals ───────────────────── */
+[data-theme="grape"]:not(.dark) {
+  --radius: 1rem;
+  --background: oklch(0.99 0.006 300);
+  --foreground: oklch(0.21 0.022 300);
+  --card: oklch(1 0.004 300);
+  --card-foreground: oklch(0.21 0.022 300);
+  --popover: oklch(1 0.004 300);
+  --popover-foreground: oklch(0.21 0.022 300);
+  --primary: oklch(0.53 0.18 295);
+  --primary-foreground: oklch(0.99 0.01 300);
+  --secondary: oklch(0.955 0.02 300);
+  --secondary-foreground: oklch(0.27 0.03 298);
+  --muted: oklch(0.96 0.015 300);
+  --muted-foreground: oklch(0.52 0.03 298);
+  --accent: oklch(0.93 0.04 298);
+  --accent-foreground: oklch(0.27 0.05 296);
+  --border: oklch(0.9 0.02 300);
+  --input: oklch(0.9 0.02 300);
+  --ring: oklch(0.53 0.18 295);
+  --shadow-color: oklch(0.5 0.14 296 / 0.18);
+  --glow: 18%;
+}
+[data-theme="grape"].dark {
+  --radius: 1rem;
+  --background: oklch(0.17 0.02 300);
+  --foreground: oklch(0.96 0.012 300);
+  --card: oklch(0.215 0.026 300);
+  --card-foreground: oklch(0.96 0.012 300);
+  --popover: oklch(0.215 0.026 300);
+  --popover-foreground: oklch(0.96 0.012 300);
+  --primary: oklch(0.68 0.16 296);
+  --primary-foreground: oklch(0.18 0.03 300);
+  --secondary: oklch(0.27 0.03 300);
+  --secondary-foreground: oklch(0.96 0.012 300);
+  --muted: oklch(0.27 0.03 300);
+  --muted-foreground: oklch(0.73 0.03 300);
+  --accent: oklch(0.32 0.05 298);
+  --accent-foreground: oklch(0.96 0.012 300);
+  --border: oklch(0.85 0.06 300 / 13%);
+  --input: oklch(0.85 0.06 300 / 17%);
+  --ring: oklch(0.62 0.12 296);
+  --shadow-color: oklch(0 0 0 / 0.5);
+  --glow: 22%;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-special: var(--special);
+  --color-special-soft: var(--special-soft);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    scrollbar-gutter: stable;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  /*
+   * <html> reserves a stable scrollbar gutter, so the page width never changes
+   * when a scrollbar appears or disappears. Radix's dialog scroll-lock
+   * (react-remove-scroll-bar) doesn't know that: on open it adds a body
+   * margin-right equal to the scrollbar width to "compensate", which
+   * double-counts the gutter and shifts the whole page sideways. Cancel it —
+   * the gutter already prevents any shift. A layered !important outranks the
+   * library's unlayered !important regardless of injection order.
+   */
+  body[data-scroll-locked] {
+    margin-right: 0 !important;
+  }
+}
+
+@layer components {
+  /*
+   * The page backdrop. A palette-tinted glow (see `--app-gradient`) instead of a
+   * flat fill, pinned to the viewport so it stays put as content scrolls.
+   *
+   * Painted on a fixed pseudo-element rather than `background-attachment: fixed`:
+   * a fixed attachment forces the browser to repaint the (multi-layer gradient)
+   * backdrop on every scroll frame, while a fixed-position layer is painted once
+   * and merely composited as content scrolls over it.
+   */
+  .app-shell::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: var(--app-gradient);
+  }
+
+}

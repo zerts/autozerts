@@ -1,0 +1,11 @@
+{
+  "name": "@ai-runner/server",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "hono": "^4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  }
+}

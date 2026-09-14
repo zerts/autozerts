@@ -1,0 +1,10 @@
+[install]
+# Supply-chain quarantine: never install an npm package version that was
+# published less than two weeks ago. A compromised release usually gets caught
+# and yanked within days, so this window keeps freshly-poisoned versions out of
+# our lockfile. Value is in seconds (14 days = 14 * 86400).
+minimumReleaseAge = 1209600
+
+# Packages exempt from the quarantine window. Keep this empty unless a package
+# genuinely needs same-day updates; every entry is a hole in the protection.
+minimumReleaseAgeExcludes = []
