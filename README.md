@@ -8,7 +8,7 @@ branch, waits for a PR, smoke-tests it in a real browser, reviews it, and sends
 the review back as a fix turn until the PR is approved (max 5 iterations). A
 web dashboard shows every loop, iteration, screenshot and review doc.
 
-https://github.com/user-attachments/assets/e8ec6847-8296-4bfc-8f98-2c18f00a406c
+https://github.com/user-attachments/assets/0b883097-e8d4-4934-a9c9-61eda2c7855e
 
 It also exposes an HTTP API for external triggers, so a launcher such as a
 Raycast command can start loops too (that extension is not part of this repo).
